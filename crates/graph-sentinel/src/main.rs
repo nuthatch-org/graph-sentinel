@@ -483,6 +483,7 @@ async fn run(cfg: Config) -> Result<()> {
         tracing::warn!("no [[outputs.notify]] channel: findings show on the dashboard only");
     } else if cfg.outputs.announce_start {
         notifier.announce(&modules).await;
+        let _ = shared.publish().await;
     }
 
     tokio::signal::ctrl_c().await?;

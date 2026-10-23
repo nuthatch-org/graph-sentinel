@@ -35,6 +35,8 @@ pub fn title(kind: &str) -> String {
         "chain_stalled" => "Chain head stalled".into(),
         "restart_issued" => "Restart issued".into(),
         "index_node_down" => "graph-node unreachable".into(),
+        "budget_warning" => "RPC spend warning".into(),
+        "budget_exceeded" => "RPC budget reached".into(),
         other => {
             let s = other.replace('_', " ");
             let mut c = s.chars();

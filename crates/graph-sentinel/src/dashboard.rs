@@ -55,6 +55,7 @@ pub struct Snapshot {
     pub modules: Vec<String>,
     pub deployments: Option<Vec<crate::liveness::Row>>,
     pub liveness_at: Option<DateTime<Utc>>,
+    pub spend: Option<crate::spend::View>,
     pub candidates_at: Option<DateTime<Utc>>,
 }
 

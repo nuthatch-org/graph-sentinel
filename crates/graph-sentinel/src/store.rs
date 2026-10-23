@@ -24,6 +24,10 @@ const SCHEMA: &[&str] = &[
         day TEXT NOT NULL, allocation TEXT NOT NULL, via TEXT NOT NULL, first_seen TEXT NOT NULL,
         PRIMARY KEY (day, allocation))",
     "CREATE TABLE IF NOT EXISTS allocations (allocation TEXT PRIMARY KEY, deployment TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS spend (
+        day TEXT NOT NULL, provider TEXT NOT NULL, method TEXT NOT NULL,
+        requests INTEGER NOT NULL, cu INTEGER NOT NULL, PRIMARY KEY (day, provider, method))",
+    "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS manifests (deployment TEXT PRIMARY KEY, activity TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS findings (
         fingerprint TEXT PRIMARY KEY, body TEXT NOT NULL, active INTEGER NOT NULL, missed INTEGER NOT NULL)",
@@ -149,6 +153,99 @@ impl Store {
             }
         }
         Ok(out)
+    }
+
+    pub async fn add_spend(
+        &self,
+        day: NaiveDate,
+        provider: &str,
+        method: &str,
+        requests: u64,
+        cu: u64,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO spend (day, provider, method, requests, cu) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (day, provider, method)
+             DO UPDATE SET requests = requests + excluded.requests, cu = cu + excluded.cu",
+        )
+        .bind(day.to_string())
+        .bind(provider)
+        .bind(method)
+        .bind(requests as i64)
+        .bind(cu as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn spend_cu(&self, day: NaiveDate) -> Result<u64> {
+        let v: Option<i64> = sqlx::query_scalar("SELECT SUM(cu) FROM spend WHERE day = ?")
+            .bind(day.to_string())
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(v.unwrap_or(0) as u64)
+    }
+
+    /// The day's billed lines, most expensive first.
+    pub async fn spend_lines(
+        &self,
+        day: NaiveDate,
+        limit: i64,
+    ) -> Result<Vec<(String, String, u64, u64)>> {
+        let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
+            "SELECT provider, method, requests, cu FROM spend WHERE day = ? AND cu > 0
+             ORDER BY cu DESC LIMIT ?",
+        )
+        .bind(day.to_string())
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(p, m, r, c)| (p, m, r as u64, c as u64))
+            .collect())
+    }
+
+    /// Billed CU per day for the last `days` days ending today, zero-filled, oldest first.
+    pub async fn spend_days(&self, today: NaiveDate, days: u64) -> Result<Vec<(NaiveDate, u64)>> {
+        let since = today - Days::new(days - 1);
+        let rows: Vec<(String, i64)> =
+            sqlx::query_as("SELECT day, SUM(cu) FROM spend WHERE day >= ? GROUP BY day")
+                .bind(since.to_string())
+                .fetch_all(&self.pool)
+                .await?;
+        let by: HashMap<String, i64> = rows.into_iter().collect();
+        Ok((0..days)
+            .rev()
+            .map(|i| {
+                let d = today - Days::new(i);
+                (d, by.get(&d.to_string()).copied().unwrap_or(0) as u64)
+            })
+            .collect())
+    }
+
+    pub async fn meta(&self, key: &str) -> Result<Option<String>> {
+        Ok(sqlx::query_scalar("SELECT value FROM meta WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?)
+    }
+
+    pub async fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        sqlx::query("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
+            .bind(key)
+            .bind(value)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn clear_meta(&self, key: &str) -> Result<()> {
+        sqlx::query("DELETE FROM meta WHERE key = ?")
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn manifest(&self, deployment: &str) -> Result<Option<Activity>> {

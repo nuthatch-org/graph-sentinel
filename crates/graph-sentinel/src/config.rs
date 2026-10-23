@@ -17,6 +17,8 @@ pub struct Config {
     pub reo: Reo,
     #[serde(default)]
     pub liveness: Liveness,
+    /// RPC spend guard; on when `graph_node_metrics_url` is set.
+    pub spend: Option<Spend>,
     #[serde(default)]
     pub outputs: Outputs,
 }
@@ -54,6 +56,10 @@ fn default_network_subgraph() -> String {
 impl Config {
     pub fn reo_enabled(&self) -> bool {
         self.sources.indexer_address.is_some() && self.sources.tap_db_url().is_some()
+    }
+
+    pub fn spend_enabled(&self) -> bool {
+        self.spend.is_some()
     }
 
     pub fn liveness_enabled(&self) -> bool {
@@ -176,6 +182,38 @@ impl Liveness {
             chain_patience: self.chain_patience,
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Spend {
+    /// graph-node's Prometheus endpoint (port 8040 inside the container).
+    pub graph_node_metrics_url: String,
+    pub daily_budget_usd: f64,
+    #[serde(default = "default_warn_ratio")]
+    pub warn_ratio: f64,
+    #[serde(default = "default_billed")]
+    pub billed_providers: Vec<String>,
+    #[serde(default = "default_cu_price")]
+    pub usd_per_million_cu: f64,
+    #[serde(default = "default_spend_interval", with = "humantime_serde")]
+    pub interval: Duration,
+    /// Run once when the day's budget is reached, e.g. `docker compose stop graph-node`.
+    pub stop_command: Option<String>,
+    /// Run after midnight UTC if the guard stopped graph-node.
+    pub resume_command: Option<String>,
+}
+
+fn default_warn_ratio() -> f64 {
+    0.7
+}
+fn default_billed() -> Vec<String> {
+    vec!["alchemy".into()]
+}
+fn default_cu_price() -> f64 {
+    0.45
+}
+fn default_spend_interval() -> Duration {
+    Duration::from_secs(60)
 }
 
 #[derive(Debug, Clone, Deserialize)]

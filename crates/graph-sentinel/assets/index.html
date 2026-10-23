@@ -207,6 +207,13 @@ tbody tr:hover { background: var(--bg-inset); }
 .state.quiet { color: var(--text-muted); background: var(--bg-inset); }
 td.dim { color: var(--text-muted); }
 
+/* --- spend ------------------------------------------------------------- */
+.spend-split { margin-top: 1.25rem; padding: 0; }
+.meter { height: 8px; border-radius: 9999px; background: var(--bg-inset); margin-top: 0.8rem; overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--accent); border-radius: 9999px; }
+.meter i.hot { background: var(--warn); }
+.stats.three { grid-template-columns: repeat(3, 1fr); }
+
 /* --- scope --------------------------------------------------------------- */
 .scope { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-top: 1.5rem; }
 .scope h3 { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 400; }
@@ -267,6 +274,28 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
       <p class="lede rise rise-3" id="lede">The first readings appear within a minute of start-up.</p>
       <noscript><p class="error">This page draws from <code>/api/snapshot</code> and needs JavaScript. <code>graph-sentinel status</code> prints the active findings.</p></noscript>
       <div id="error"></div>
+    </div>
+  </section>
+
+  <section id="spend-sec" hidden>
+    <div class="wrap">
+      <p class="kicker">RPC spend</p>
+      <h2 id="spend-head">Today's RPC spend.</h2>
+      <div class="stats" id="spend-stats"></div>
+      <div class="split spend-split">
+        <div class="card">
+          <div class="card-head"><p class="kicker">Last seven days</p><span class="legend"><span><i class="sw line"></i>daily budget</span></span></div>
+          <div class="chart" id="spend-chart"></div>
+        </div>
+        <div class="card">
+          <p class="kicker">Today, most expensive first</p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Provider</th><th>Method</th><th class="num">Requests</th><th class="num">USD</th></tr></thead>
+            <tbody id="spend-lines"></tbody>
+          </table></div>
+        </div>
+      </div>
+      <p class="note" id="spend-note"></p>
     </div>
   </section>
 
@@ -497,7 +526,8 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     const down = s.sources.filter((x) => !x.up && !/^(telegram|discord|slack|webhook)/.test(x.name)).map((x) => x.name);
 
     let head;
-    if (count('index_node_down')) head = 'graph-node is not answering.';
+    if (s.spend && s.spend.stopped) head = 'RPC budget reached: graph-node is stopped until midnight UTC.';
+    else if (count('index_node_down')) head = 'graph-node is not answering.';
     else if (frozen) head = `${plural(frozen, 'deployment is', 'deployments are')} frozen while reporting healthy.`;
     else if (ineligible) head = 'Ineligible for indexing rewards.';
     else if (failed) head = `${plural(failed, 'deployment has', 'deployments have')} failed.`;
@@ -516,6 +546,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
       const order = ['frozen', 'failed', 'chain stalled', 'stalled', 'not moving', 'idle', 'paused', 'caught up', 'moving'];
       parts.push(`${plural(deps.length, 'deployment', 'deployments')}: ${order.filter((k) => by[k]).map((k) => `${by[k]} ${k}`).join(', ')}.`);
     }
+    if (s.spend && !s.spend.stopped) parts.push(`RPC spend ${usd(s.spend.today_usd)} of ${usd(s.spend.budget_usd)} today.`);
     if (r && head !== reoHeadline(r)) parts.push(`REO: ${reoHeadline(r).replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())}${ineligible ? ', and ineligible on chain' : ''}.`);
     if (!f.length && (deps || r)) parts.push('No open findings.');
     else if (f.length) parts.push(`${plural(f.length, 'open finding', 'open findings')} below.`);
@@ -539,6 +570,54 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
         <td class="dim">${d.last_progress ? esc(ago(d.last_progress)) : 'not since start'}</td></tr>`;
     }).join('') : '<tr><td colspan="6" class="no">The index-node reports no deployments.</td></tr>';
     $('live-note').innerHTML = `Read from the index-node ${esc(ago(s.liveness_at))}. A deployment behind and still is checked against the chain: events waiting for it make it frozen, none make it idle. "Last moved" counts from when graph-sentinel started watching.`;
+  }
+
+
+  // --- spend -----------------------------------------------------------------
+  const usd = (v) => `$${Number(v).toFixed(2)}`;
+  function renderSpend(s) {
+    const v = s.spend;
+    $('spend-sec').hidden = !v;
+    if (!v) return;
+    const pct = Math.min(100, (v.today_usd / v.budget_usd) * 100);
+    $('spend-head').textContent = v.stopped
+      ? `Budget reached: graph-node is stopped until midnight UTC.`
+      : `${usd(v.today_usd)} of ${usd(v.budget_usd)} spent today.`;
+    const stats = [
+      { label: 'Today', value: usd(v.today_usd), unit: `of ${usd(v.budget_usd)}`, sub: `${pct.toFixed(0)}% of the daily budget.`, meter: pct },
+      { label: 'At this rate', value: usd(v.projected_usd), unit: 'by midnight UTC', sub: v.projected_usd > v.budget_usd ? 'Over budget: the guard will stop graph-node when it is reached.' : 'Inside the budget.' },
+      { label: 'Guard', value: v.stopped ? 'Stopped' : 'Armed', cls: v.stopped ? 'warn' : 'ok', sub: v.stopped ? 'graph-node starts again after midnight UTC.' : `Stops graph-node at ${usd(v.budget_usd)}.` },
+    ];
+    $('spend-stats').className = 'stats three';
+    $('spend-stats').innerHTML = stats.map((x) => `
+      <div class="stat"><p class="label">${esc(x.label)}</p>
+        <p class="value ${x.cls || ''}">${esc(x.value)}${x.unit ? `<span class="unit">${esc(x.unit)}</span>` : ''}</p>
+        ${x.meter != null ? `<div class="meter" role="img" aria-label="${x.meter.toFixed(0)} percent of budget"><i class="${x.meter >= 70 ? 'hot' : ''}" style="width:${x.meter}%"></i></div>` : ''}
+        <p class="sub">${esc(x.sub)}</p></div>`).join('');
+
+    // Seven days against the budget line.
+    const box = $('spend-chart');
+    const W = Math.max(280, box.clientWidth || 400), H = 180, pad = { l: 40, r: 8, t: 14, b: 24 };
+    const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+    const max = Math.max(v.budget_usd * 1.15, ...v.days.map((d) => d[1]));
+    const y = (x) => pad.t + ih - (x / max) * ih;
+    const slot = iw / v.days.length, bw = Math.max(6, slot * 0.55);
+    let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="RPC spend per day for the last seven days against the daily budget">`;
+    svg += `<line class="base" x1="${pad.l}" x2="${W - pad.r}" y1="${y(0)}" y2="${y(0)}"/>`;
+    v.days.forEach(([day, amount], i) => {
+      const x0 = pad.l + i * slot + (slot - bw) / 2;
+      const h = y(0) - y(amount);
+      if (amount > 0) svg += `<rect x="${x0}" y="${y(amount)}" width="${bw}" height="${Math.max(1, h)}" rx="3" fill="${amount >= v.budget_usd ? 'var(--warn)' : 'var(--accent)'}"><title>${dayName(day)}: ${usd(amount)}</title></rect>`;
+      svg += `<text class="tick" x="${x0 + bw / 2}" y="${H - 6}" text-anchor="middle">${i === v.days.length - 1 ? 'today' : dayName(day)}</text>`;
+      if (amount > 0) svg += `<text class="tick" x="${x0 + bw / 2}" y="${y(amount) - 5}" text-anchor="middle">${usd(amount)}</text>`;
+    });
+    svg += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(v.budget_usd)}" y2="${y(v.budget_usd)}" stroke="var(--rust)" stroke-width="2"/>`;
+    svg += `<text class="lab" x="${pad.l - 6}" y="${y(v.budget_usd) + 4}" text-anchor="end">${usd(v.budget_usd)}</text>`;
+    box.innerHTML = svg + '</svg>';
+
+    $('spend-lines').innerHTML = v.top.length ? v.top.map((l) => `<tr><td class="dep">${esc(l.provider)}</td><td>${esc(l.method)}</td><td class="num">${num(l.requests)}</td><td class="num">${usd(l.usd)}</td></tr>`).join('')
+      : '<tr><td colspan="4" class="no">Nothing billed yet today.</td></tr>';
+    $('spend-note').innerHTML = `Priced from graph-node's own request counters at Alchemy's per-method compute units and ${usd(0.45)} per million. Providers matching <code>${esc(v.billed_providers.join(', '))}</code> are billed; the rest are free public RPCs. Counting since ${esc(ago(v.counting_since))}; requests before graph-sentinel's first reading are not attributed.`;
   }
 
   // --- chart ---------------------------------------------------------------
@@ -723,7 +802,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     $('version').textContent = `graph-sentinel ${snap.version}`;
     $('reo-sec').hidden = !snap.reo;
     $('cand-sec').hidden = !snap.reo;
-    renderStatus(snap); renderDeployments(snap);
+    renderStatus(snap); renderSpend(snap); renderDeployments(snap);
     if (snap.reo) { renderReo(snap); renderChart(snap); renderRuns(snap); renderCandidates(snap); }
     renderFindings(snap); renderSources(snap);
   }
@@ -751,6 +830,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
 
   let resizeT;
   new ResizeObserver(() => { clearTimeout(resizeT); resizeT = setTimeout(() => snap && renderChart(snap), 80); }).observe($('chart'));
+  new ResizeObserver(() => snap && snap.spend && renderSpend(snap)).observe($('spend-chart'));
   poll();
   setInterval(poll, 30000);
   setInterval(tickAgo, 1000);

@@ -2,6 +2,16 @@
 
 Newest first.
 
+## 2026-10-23: RPC spend guard
+
+- `[spend]` reads graph-node's `endpoint_request` counters (every RPC call, per provider and
+  method; v0.41 batches only on a deprecated receipts path), prices billed providers at Alchemy's
+  per-method CU and $0.45/M, and keeps a per-day ledger. Warns at 70% or when the projection
+  passes the budget; at 100% runs `stop_command` once, raises a critical finding, and runs
+  `resume_command` after midnight UTC. While stopped, liveness does not cry "index-node down".
+- Tested against a fake metrics endpoint: public providers free, trips once, remembers across a
+  restart. Overshoot is at most one tick of spend. The midnight resume is not yet exercised.
+
 ## 2026-10-23: liveness (M3), optional modules, Docker image
 
 - Modules switch on from their sources: liveness with `index_node_url`, the REO meter with

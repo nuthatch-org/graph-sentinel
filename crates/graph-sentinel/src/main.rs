@@ -5,6 +5,7 @@ mod liveness;
 mod meter;
 mod notify;
 mod outputs;
+mod spend;
 mod store;
 
 use std::path::PathBuf;
@@ -424,7 +425,7 @@ impl Shared {
 }
 
 async fn run(cfg: Config) -> Result<()> {
-    if !cfg.reo_enabled() && !cfg.liveness_enabled() {
+    if !cfg.reo_enabled() && !cfg.liveness_enabled() && !cfg.spend_enabled() {
         anyhow::bail!(
             "nothing to watch: set [sources] index_node_url for liveness, \
              or indexer_address and indexer_postgres_url for the REO meter"
@@ -468,6 +469,13 @@ async fn run(cfg: Config) -> Result<()> {
         modules.push("REO eligibility");
         tokio::spawn(reo_loop(meter, cfg.clone(), shared.clone()));
     }
+    let mut guard_stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Some(sc) = cfg.spend.clone() {
+        let g = spend::Guard::new(sc.clone(), store.clone()).await?;
+        guard_stopped = g.stopped.clone();
+        modules.push("RPC spend");
+        tokio::spawn(spend_loop(g, sc.interval, shared.clone()));
+    }
     if cfg.liveness_enabled()
         && let Some(l) = liveness::Liveness::new(&cfg, store.clone())
     {
@@ -476,6 +484,7 @@ async fn run(cfg: Config) -> Result<()> {
             Arc::new(l),
             cfg.liveness.interval,
             shared.clone(),
+            guard_stopped,
         ));
     }
     shared.snapshot.write().await.modules = modules.iter().map(|m| m.to_string()).collect();
@@ -491,7 +500,28 @@ async fn run(cfg: Config) -> Result<()> {
     Ok(())
 }
 
-async fn liveness_loop(l: Arc<liveness::Liveness>, every: Duration, sh: Shared) {
+async fn spend_loop(mut g: spend::Guard, every: Duration, sh: Shared) {
+    let mut tick = tokio::time::interval(every);
+    loop {
+        tick.tick().await;
+        match g.tick().await {
+            Ok((view, found)) => {
+                sh.snapshot.write().await.spend = Some(view);
+                if let Err(e) = sh.findings(sentinel_checks::spend::CHECK, found).await {
+                    tracing::warn!(error = %e, "recording spend findings failed");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "spend tick failed"),
+        }
+    }
+}
+
+async fn liveness_loop(
+    l: Arc<liveness::Liveness>,
+    every: Duration,
+    sh: Shared,
+    guard_stopped: Arc<std::sync::atomic::AtomicBool>,
+) {
     let mut tick = tokio::time::interval(every);
     let mut failures = 0u32;
     loop {
@@ -512,6 +542,16 @@ async fn liveness_loop(l: Arc<liveness::Liveness>, every: Duration, sh: Shared) 
             }
             Err(e) => {
                 failures += 1;
+                if guard_stopped.load(std::sync::atomic::Ordering::SeqCst) {
+                    // Down by the spend guard's hand: say so, alert nothing new.
+                    sh.source(
+                        "index-node",
+                        &Err("stopped by the spend guard until midnight UTC".into()),
+                    )
+                    .await;
+                    let _ = sh.publish().await;
+                    continue;
+                }
                 let msg = format!("{e:#}");
                 tracing::warn!(error = %msg, "liveness tick failed");
                 sh.source("index-node", &Err(msg.clone())).await;

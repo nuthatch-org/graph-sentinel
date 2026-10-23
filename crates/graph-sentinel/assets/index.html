@@ -196,6 +196,17 @@ td .no { color: var(--text-muted); font-family: var(--mono); font-size: 0.76rem;
 tbody tr { transition: background-color 0.15s var(--ease); }
 tbody tr:hover { background: var(--bg-inset); }
 
+/* --- deployments ------------------------------------------------------ */
+.chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.1rem; }
+.chips span { font-family: var(--mono); font-size: 0.74rem; color: var(--text-muted); background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.25rem 0.6rem; }
+.chips b { font-weight: 400; color: var(--text); margin-right: 0.3rem; }
+.state { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; border-radius: 4px; padding: 0.12rem 0.45rem; white-space: nowrap; }
+.state.crit { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.state.bad { color: var(--rust); background: var(--pale-rust-bg); }
+.state.good { color: var(--ok); background: var(--pale-green-bg); }
+.state.quiet { color: var(--text-muted); background: var(--bg-inset); }
+td.dim { color: var(--text-muted); }
+
 /* --- scope --------------------------------------------------------------- */
 .scope { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-top: 1.5rem; }
 .scope h3 { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 400; }
@@ -251,12 +262,34 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
 <main id="main">
   <section class="hero">
     <div class="wrap">
-      <p class="kicker rise rise-1">Rewards eligibility</p>
-      <h1 id="headline" class="rise rise-2">Reading the ledger.</h1>
-      <p class="lede rise rise-3" id="lede">The first figures appear once the daemon has completed its first tick.</p>
-      <noscript><p class="error">This page draws from <code>/api/snapshot</code> and needs JavaScript. <code>graph-sentinel reo</code> prints the same figures.</p></noscript>
+      <p class="kicker rise rise-1">Status</p>
+      <h1 id="headline" class="rise rise-2">Waiting for the first tick.</h1>
+      <p class="lede rise rise-3" id="lede">The first readings appear within a minute of start-up.</p>
+      <noscript><p class="error">This page draws from <code>/api/snapshot</code> and needs JavaScript. <code>graph-sentinel status</code> prints the active findings.</p></noscript>
       <div id="error"></div>
+    </div>
+  </section>
 
+  <section id="live-sec" hidden>
+    <div class="wrap">
+      <p class="kicker">Deployments</p>
+      <h2 id="live-head">Every deployment, worst first.</h2>
+      <div class="chips" id="live-summary"></div>
+      <div class="card">
+        <div class="table-wrap"><table>
+          <thead><tr><th>Deployment</th><th>Network</th><th>State</th><th class="num">Head</th><th class="num">Behind</th><th>Last moved</th></tr></thead>
+          <tbody id="deployments"></tbody>
+        </table></div>
+        <p class="note" id="live-note"></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="reo-sec" hidden>
+    <div class="wrap">
+      <p class="kicker">Rewards eligibility</p>
+      <h2 id="reo-head">REO eligibility.</h2>
+      <p class="lede" id="reo-lede"></p>
       <div class="stats" id="stats" aria-live="polite"></div>
 
       <div class="card">
@@ -294,7 +327,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     </div>
   </section>
 
-  <section>
+  <section id="cand-sec" hidden>
     <div class="wrap">
       <p class="kicker">Candidates</p>
       <h2>Deployments worth adding.</h2>
@@ -317,18 +350,18 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
         <div class="in">
           <h3>Does</h3>
           <ul>
-            <li>Counts the distinct deployments you were paid to serve each UTC day, from tap-agent's own receipt notifications.</li>
-            <li>Replays the oracle's rule over that ledger: 29-day window, minimum applied retroactively.</li>
-            <li>Reads your eligibility straight from the RewardsEligibilityOracle contract.</li>
-            <li>Ranks signalled deployments you could add, cheapest first.</li>
+            <li>Catches a deployment that has stopped while graph-node calls it healthy, by asking the chain whether events are waiting for it.</li>
+            <li>Tells a stalled chain from a stalled deployment, and a quiet contract from a frozen one.</li>
+            <li>Counts the deployments you were paid to serve each day and replays the oracle's rule over them.</li>
+            <li>Reads eligibility straight from the RewardsEligibilityOracle contract, and ranks deployments worth adding.</li>
           </ul>
         </div>
         <div class="out">
           <h3>Does not</h3>
           <ul>
-            <li>See latency or freshness as the gateway measured them. Receipts make every count an upper bound.</li>
-            <li>Remember days before it started: tap-agent deletes receipts once they are aggregated.</li>
-            <li>Write to any database, allocate, or sign anything. It holds no keys.</li>
+            <li>See addresses created by templates, so a template-heavy deployment can only be called "not moving", never "frozen".</li>
+            <li>See latency or freshness as the gateway measured them. Receipts make every REO count an upper bound.</li>
+            <li>Write to any database, allocate, or sign anything. A restart happens only if you switch it on.</li>
             <li>Ask for a login. Keep it on loopback or behind your own proxy.</li>
           </ul>
         </div>
@@ -380,25 +413,26 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
   });
 
   // --- headline and stats --------------------------------------------------
-  function renderHero(s) {
+  // The REO verdict as one sentence, shared by the status line and the REO section.
+  function reoHeadline(r) {
+    const hold = r.if_traffic_holds;
+    if (hold.first_failing_run) {
+      const n = hold.runs.find((v) => v.run === hold.first_failing_run)?.subgraphs_per_day;
+      if (hold.first_failing_run === r.today) return `Today's oracle run fails at ${n} a day.`;
+      return `At ${r.typical_count} a day, the run on ${dayName(hold.first_failing_run)} fails.`;
+    }
+    if (hold.eligible_until) return `Eligible through ${dayName(hold.eligible_until)} at the current pace.`;
+    return 'No qualifying days in the window yet.';
+  }
+
+  function renderReo(s) {
     const r = s.reo;
-    $('error').innerHTML = s.reo_error ? `<p class="error">${esc(s.reo_error)}</p>` : '';
     if (!r) return;
     const hold = r.if_traffic_holds;
     const next = r.next_step;
     const chain = r.on_chain;
 
-    let head;
-    if (hold.first_failing_run) {
-      const n = hold.runs.find((v) => v.run === hold.first_failing_run)?.subgraphs_per_day;
-      head = `At ${r.typical_count} a day, the run on ${dayName(hold.first_failing_run)} fails.`;
-      if (hold.first_failing_run === r.today) head = `Today's oracle run fails at ${n} a day.`;
-    } else if (hold.eligible_until) {
-      head = `Eligible through ${dayName(hold.eligible_until)} at the current pace.`;
-    } else {
-      head = 'No qualifying days in the window yet.';
-    }
-    $('headline').textContent = head;
+    $('reo-head').textContent = reoHeadline(r);
 
     const parts = [];
     if (chain) {
@@ -418,7 +452,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     if (r.last_posted && r.last_posted.ledger.passes && !r.last_posted.renewed) {
       parts.push(`The ${dayName(r.last_posted.ledger.run)} run did not renew you despite ${r.last_posted.ledger.qualifying_days} qualifying days in the receipts, so read these counts as optimistic.`);
     }
-    $('lede').innerHTML = parts.join(' ');
+    $('reo-lede').innerHTML = parts.join(' ');
 
     let chainStat;
     if (!chain) chainStat = { v: 'Not read', cls: '', sub: 'Add an arbitrum-one RPC to read the oracle contract.' };
@@ -439,6 +473,70 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
       <div class="stat"><p class="label">${esc(x.label)}</p>
         <p class="value ${x.cls || ''}">${esc(x.value)}${x.unit ? `<span class="unit">${esc(x.unit)}</span>` : ''}</p>
         <p class="sub">${esc(x.sub)}</p></div>`).join('');
+  }
+
+
+  // --- the status line, across every module ----------------------------------
+  const STATE = {
+    confirmed_frozen: ['frozen', 'crit'], frozen: ['frozen', 'crit'], failed: ['failed', 'bad'],
+    chain_stalled: ['chain stalled', 'bad'], stalled: ['stalled', 'bad'], stopped: ['not moving', 'bad'],
+    idle: ['idle', 'quiet'], paused: ['paused', 'quiet'], caught_up: ['caught up', 'good'], moving: ['moving', 'good'],
+  };
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+  function renderStatus(s) {
+    const errs = [s.reo_error].filter(Boolean);
+    $('error').innerHTML = errs.map((e) => `<p class="error">${esc(e)}</p>`).join('');
+    const f = s.findings;
+    const count = (...kinds) => f.filter((x) => kinds.includes(x.kind)).length;
+    const deps = s.deployments;
+    const r = s.reo;
+    const frozen = count('frozen'), failed = count('failed'), still = count('stalled', 'stopped');
+    const chains = f.filter((x) => x.kind === 'chain_stalled').map((x) => x.subject);
+    const ineligible = r && r.on_chain && !r.on_chain.eligible;
+
+    let head;
+    if (count('index_node_down')) head = 'graph-node is not answering.';
+    else if (frozen) head = `${plural(frozen, 'deployment is', 'deployments are')} frozen while reporting healthy.`;
+    else if (ineligible) head = 'Ineligible for indexing rewards.';
+    else if (failed) head = `${plural(failed, 'deployment has', 'deployments have')} failed.`;
+    else if (r && r.if_traffic_holds.first_failing_run) head = reoHeadline(r);
+    else if (chains.length) head = `The ${chains.join(' and ')} chain head ${chains.length > 1 ? 'have' : 'has'} stopped.`;
+    else if (still) head = `${plural(still, 'deployment is', 'deployments are')} not moving.`;
+    else if (deps || r) head = 'Nothing needs attention.';
+    else head = 'Waiting for the first tick.';
+    $('headline').textContent = head;
+
+    const parts = [];
+    if (deps) {
+      const by = {};
+      deps.forEach((d) => { const k = STATE[d.verdict][0]; by[k] = (by[k] || 0) + 1; });
+      const order = ['frozen', 'failed', 'chain stalled', 'stalled', 'not moving', 'idle', 'paused', 'caught up', 'moving'];
+      parts.push(`${plural(deps.length, 'deployment', 'deployments')}: ${order.filter((k) => by[k]).map((k) => `${by[k]} ${k}`).join(', ')}.`);
+    }
+    if (r && head !== reoHeadline(r)) parts.push(`REO: ${reoHeadline(r).replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())}${ineligible ? ', and ineligible on chain' : ''}.`);
+    if (!f.length && (deps || r)) parts.push('No open findings.');
+    else if (f.length) parts.push(`${plural(f.length, 'open finding', 'open findings')} below.`);
+    $('lede').textContent = parts.join(' ') || 'The first readings appear within a minute of start-up.';
+  }
+
+  function renderDeployments(s) {
+    const deps = s.deployments;
+    $('live-sec').hidden = !deps;
+    if (!deps) return;
+    const by = {};
+    deps.forEach((d) => { const k = STATE[d.verdict][0]; by[k] = (by[k] || 0) + 1; });
+    $('live-summary').innerHTML = Object.entries(by).map(([k, n]) => `<span><b>${n}</b>${esc(k)}</span>`).join('');
+    $('deployments').innerHTML = deps.length ? deps.map((d) => {
+      const [label, cls] = STATE[d.verdict] || [d.verdict, 'quiet'];
+      return `<tr><td class="dep" title="${esc(d.deployment)}">${esc(shortDep(d.deployment))}</td>
+        <td>${esc(d.network || '?')}</td>
+        <td><span class="state ${cls}">${esc(label)}</span></td>
+        <td class="num">${d.latest != null ? num(d.latest) : '<span class="no">unknown</span>'}</td>
+        <td class="num ${d.behind ? '' : 'dim'}">${d.behind != null ? num(d.behind) : ''}</td>
+        <td class="dim">${d.last_progress ? esc(ago(d.last_progress)) : 'not since start'}</td></tr>`;
+    }).join('') : '<tr><td colspan="6" class="no">The index-node reports no deployments.</td></tr>';
+    $('live-note').innerHTML = `Read from the index-node ${esc(ago(s.liveness_at))}. A deployment behind and still is checked against the chain: events waiting for it make it frozen, none make it idle. "Last moved" counts from when graph-sentinel started watching.`;
   }
 
   // --- chart ---------------------------------------------------------------
@@ -621,15 +719,19 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     $('indexer').textContent = shortAddr(snap.indexer);
     $('indexer').title = `Indexer ${snap.indexer}`;
     $('version').textContent = `graph-sentinel ${snap.version}`;
-    renderHero(snap); renderChart(snap); renderRuns(snap); renderFindings(snap); renderSources(snap); renderCandidates(snap);
+    $('reo-sec').hidden = !snap.reo;
+    $('cand-sec').hidden = !snap.reo;
+    renderStatus(snap); renderDeployments(snap);
+    if (snap.reo) { renderReo(snap); renderChart(snap); renderRuns(snap); renderCandidates(snap); }
+    renderFindings(snap); renderSources(snap);
   }
 
   function tickAgo() {
     const live = $('live');
     if (!snap || !snap.generated_at) return;
     $('ago').textContent = `updated ${ago(snap.generated_at)}`;
-    // Ticks run every two minutes; three missed means the daemon or its sources are stuck.
-    live.classList.toggle('stale', Date.now() - Date.parse(snap.generated_at) > 6 * 60 * 1000);
+    // Ticks run every two to five minutes; three missed means the daemon or its sources are stuck.
+    live.classList.toggle('stale', Date.now() - Date.parse(snap.generated_at) > 15 * 60 * 1000);
   }
 
   async function poll() {

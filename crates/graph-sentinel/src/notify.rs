@@ -28,6 +28,13 @@ pub fn title(kind: &str) -> String {
         "reo_ineligible" => "REO ineligible".into(),
         "reo_at_risk" => "REO eligibility at risk".into(),
         "reo_oracle_disagrees" => "Oracle disagrees with receipts".into(),
+        "frozen" => "Deployment frozen".into(),
+        "stalled" => "Deployment stalled".into(),
+        "stopped" => "Deployment not moving".into(),
+        "failed" => "Deployment failed".into(),
+        "chain_stalled" => "Chain head stalled".into(),
+        "restart_issued" => "Restart issued".into(),
+        "index_node_down" => "graph-node unreachable".into(),
         other => {
             let s = other.replace('_', " ");
             let mut c = s.chars();
@@ -238,11 +245,14 @@ impl Notifier {
         self.targets.is_empty() && self.broken.is_empty()
     }
 
-    pub async fn announce(&self) {
+    pub async fn announce(&self, modules: &[&str]) {
         let m = Message {
             label: "WATCHING".into(),
             title: "graph-sentinel started".into(),
-            body: "Watching REO eligibility. You will hear from it here when something needs attention.".into(),
+            body: format!(
+                "Watching {}. You will hear from it here when something needs attention.",
+                modules.join(" and ")
+            ),
             severity: Severity::Critical, // reaches every channel, whatever its threshold
             resolved: false,
         };

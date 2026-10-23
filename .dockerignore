@@ -1,0 +1,4 @@
+target
+.git
+*.sqlite
+graph-sentinel.toml

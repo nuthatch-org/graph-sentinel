@@ -53,6 +53,60 @@ impl Rpc {
         Ok(u64::from_str_radix(h.trim_start_matches("0x"), 16)?)
     }
 
+    /// Count logs from `addresses` with any of `topics` as topic0 in `[from, to]`. Halves the
+    /// range on a provider's range or size complaint; returns the count and the range covered.
+    pub async fn count_logs(
+        &self,
+        from: u64,
+        to: u64,
+        addresses: &[String],
+        topics: &[String],
+    ) -> Result<(u64, u64, u64)> {
+        let mut to = to.max(from);
+        loop {
+            let params = json!([{
+                "fromBlock": format!("0x{from:x}"),
+                "toBlock": format!("0x{to:x}"),
+                "address": addresses,
+                "topics": [topics],
+            }]);
+            match self.call_value("eth_getLogs", params).await {
+                Ok(v) => return Ok((v.as_array().map_or(0, |a| a.len() as u64), from, to)),
+                Err(e) if to > from && is_range_error(&e.to_string()) => {
+                    to = from + (to - from) / 2
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    async fn call_value(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        #[derive(Deserialize)]
+        struct R {
+            result: Option<serde_json::Value>,
+            error: Option<serde_json::Value>,
+        }
+        let r: R = self
+            .http
+            .post(&self.url)
+            .timeout(std::time::Duration::from_secs(20))
+            .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }))
+            .send()
+            .await
+            .with_context(|| format!("{method} request"))?
+            .error_for_status()?
+            .json()
+            .await?;
+        if let Some(e) = r.error {
+            bail!("{method}: {e}");
+        }
+        r.result.with_context(|| format!("{method}: empty result"))
+    }
+
     /// `eth_call` returning a single 32-byte word as u128 (enough for timestamps and bools).
     async fn word(&self, to: &Address, data: String) -> Result<u128> {
         let r = self
@@ -63,6 +117,22 @@ impl Rpc {
             .await?;
         decode_word(&r)
     }
+}
+
+fn is_range_error(e: &str) -> bool {
+    let e = e.to_ascii_lowercase();
+    [
+        "range",
+        "too many",
+        "limit",
+        "exceed",
+        "10000",
+        "query returned more",
+        "block range",
+        "response size",
+    ]
+    .iter()
+    .any(|k| e.contains(k))
 }
 
 fn decode_word(hex: &str) -> Result<u128> {

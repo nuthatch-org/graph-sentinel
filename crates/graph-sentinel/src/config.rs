@@ -16,17 +16,23 @@ pub struct Config {
     #[serde(default)]
     pub reo: Reo,
     #[serde(default)]
+    pub liveness: Liveness,
+    #[serde(default)]
     pub outputs: Outputs,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Sources {
-    pub indexer_address: Address,
+    /// Needed for the REO meter. A graph-node without an indexer (a fisherman's rig) leaves it out.
+    pub indexer_address: Option<Address>,
     /// graph-node's primary shard. Optional for the REO meter; used by candidates and liveness.
     pub postgres_url: Option<String>,
     /// The database tap-agent and indexer-service write to. Defaults to `postgres_url`.
     pub indexer_postgres_url: Option<String>,
+    /// Enables liveness.
     pub index_node_url: Option<String>,
+    #[serde(default = "default_ipfs")]
+    pub ipfs_url: String,
     #[serde(default = "default_network_subgraph")]
     pub network_subgraph_url: String,
     /// Env var holding a bearer token for the network subgraph, if it needs one.
@@ -36,9 +42,31 @@ pub struct Sources {
     pub rpc: HashMap<String, String>,
 }
 
+fn default_ipfs() -> String {
+    "https://ipfs.thegraph.com".into()
+}
+
 fn default_network_subgraph() -> String {
     "https://gateway.thegraph.com/api/subgraphs/id/DZz4kDTdmzWLWsV373w2bSmoar3umKKH9y82SUKr5qmp"
         .into()
+}
+
+impl Config {
+    pub fn reo_enabled(&self) -> bool {
+        self.sources.indexer_address.is_some() && self.sources.tap_db_url().is_some()
+    }
+
+    pub fn liveness_enabled(&self) -> bool {
+        self.liveness.enabled && self.sources.index_node_url.is_some()
+    }
+
+    pub fn display_name(&self) -> String {
+        self.outputs
+            .name
+            .clone()
+            .or_else(|| self.sources.indexer_address.as_ref().map(|a| a.to_string()))
+            .unwrap_or_else(|| "graph-node".into())
+    }
 }
 
 impl Sources {
@@ -105,7 +133,56 @@ impl Reo {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+pub struct Liveness {
+    pub enabled: bool,
+    #[serde(with = "humantime_serde")]
+    pub interval: Duration,
+    pub lag_tolerance_blocks: u64,
+    pub activity_window_blocks: u64,
+    pub idle_patience: u32,
+    pub chain_patience: u32,
+    /// Run `restart_command` on a deployment frozen two ticks running. Off by default.
+    pub restart: bool,
+    /// `{deployment}` is replaced with the IPFS hash.
+    pub restart_command: String,
+    #[serde(with = "humantime_serde")]
+    pub restart_cooldown: Duration,
+}
+
+impl Default for Liveness {
+    fn default() -> Self {
+        let c = sentinel_checks::liveness::Config::default();
+        Liveness {
+            enabled: true,
+            interval: Duration::from_secs(300),
+            lag_tolerance_blocks: c.lag_tolerance_blocks,
+            activity_window_blocks: c.activity_window_blocks,
+            idle_patience: c.idle_patience,
+            chain_patience: c.chain_patience,
+            restart: false,
+            restart_command: "graphman --config /etc/graph-node/config.toml restart {deployment}"
+                .into(),
+            restart_cooldown: Duration::from_secs(1800),
+        }
+    }
+}
+
+impl Liveness {
+    pub fn check_config(&self) -> sentinel_checks::liveness::Config {
+        sentinel_checks::liveness::Config {
+            lag_tolerance_blocks: self.lag_tolerance_blocks,
+            activity_window_blocks: self.activity_window_blocks,
+            idle_patience: self.idle_patience,
+            chain_patience: self.chain_patience,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct Outputs {
+    /// What this sentinel watches, in messages and the page header. Defaults to the indexer.
+    pub name: Option<String>,
     /// Dashboard, `/api/snapshot` and `/metrics`. Loopback by default: the page has no login.
     #[serde(alias = "metrics_listen")]
     pub listen: Option<SocketAddr>,
@@ -121,6 +198,7 @@ pub struct Outputs {
 impl Default for Outputs {
     fn default() -> Self {
         Outputs {
+            name: None,
             listen: Some(([127, 0, 0, 1], 9477).into()),
             public_url: None,
             state_db: "graph-sentinel.sqlite".into(),
@@ -140,6 +218,8 @@ pub struct Channel {
     /// Telegram.
     pub bot_token: Option<String>,
     pub bot_token_env: Option<String>,
+    /// A file holding only the token, which keeps it out of the config and the environment.
+    pub bot_token_file: Option<PathBuf>,
     pub chat_id: Option<String>,
     #[serde(default = "default_telegram_api")]
     pub telegram_api: String,
@@ -187,7 +267,13 @@ impl Channel {
     }
 
     pub fn resolved_bot_token(&self) -> Option<String> {
-        from_env(&self.bot_token, &self.bot_token_env)
+        from_env(&self.bot_token, &self.bot_token_env).or_else(|| {
+            self.bot_token_file
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+        })
     }
 }
 

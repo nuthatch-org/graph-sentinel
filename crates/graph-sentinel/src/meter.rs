@@ -35,7 +35,7 @@ pub struct Meter {
 const BACKFILL_DAYS: u64 = 29;
 
 impl Meter {
-    pub async fn new(cfg: &Config, store: Store) -> Result<Self> {
+    pub async fn new(cfg: &Config, store: Store, indexer: Address) -> Result<Self> {
         let url = cfg
             .sources
             .tap_db_url()
@@ -61,7 +61,7 @@ impl Meter {
             ),
             graph_node,
             oracle,
-            indexer: cfg.sources.indexer_address.clone(),
+            indexer,
             rules: cfg.reo.rules(),
             min_signal_grt: cfg.reo.min_signal_grt,
         })
@@ -145,10 +145,6 @@ impl Meter {
 
     pub fn rules(&self) -> &Rules {
         &self.rules
-    }
-
-    pub fn indexer(&self) -> &Address {
-        &self.indexer
     }
 
     pub fn has_oracle(&self) -> bool {

@@ -6,6 +6,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Days, NaiveDate, Utc};
+use sentinel_checks::liveness::manifest::Activity;
 use sentinel_checks::reo::projection::DailyCounts;
 use sentinel_sources::tap::{Served, Via};
 use sentinel_types::{Address, DeploymentId, Finding};
@@ -23,6 +24,7 @@ const SCHEMA: &[&str] = &[
         day TEXT NOT NULL, allocation TEXT NOT NULL, via TEXT NOT NULL, first_seen TEXT NOT NULL,
         PRIMARY KEY (day, allocation))",
     "CREATE TABLE IF NOT EXISTS allocations (allocation TEXT PRIMARY KEY, deployment TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS manifests (deployment TEXT PRIMARY KEY, activity TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS findings (
         fingerprint TEXT PRIMARY KEY, body TEXT NOT NULL, active INTEGER NOT NULL, missed INTEGER NOT NULL)",
 ];
@@ -147,6 +149,24 @@ impl Store {
             }
         }
         Ok(out)
+    }
+
+    pub async fn manifest(&self, deployment: &str) -> Result<Option<Activity>> {
+        let v: Option<String> =
+            sqlx::query_scalar("SELECT activity FROM manifests WHERE deployment = ?")
+                .bind(deployment)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(v.and_then(|v| serde_json::from_str(&v).ok()))
+    }
+
+    pub async fn save_manifest(&self, deployment: &str, a: &Activity) -> Result<()> {
+        sqlx::query("INSERT OR REPLACE INTO manifests (deployment, activity) VALUES (?, ?)")
+            .bind(deployment)
+            .bind(serde_json::to_string(a)?)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn findings(&self, check: &str) -> Result<Vec<Stored>> {

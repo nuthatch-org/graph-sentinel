@@ -51,6 +51,10 @@ pub struct Snapshot {
     /// graph-node's database is configured, so candidates carry the local columns.
     pub graph_node: bool,
     pub candidates: Option<Vec<Candidate>>,
+    /// Modules running, in the order they started.
+    pub modules: Vec<String>,
+    pub deployments: Option<Vec<crate::liveness::Row>>,
+    pub liveness_at: Option<DateTime<Utc>>,
     pub candidates_at: Option<DateTime<Utc>>,
 }
 

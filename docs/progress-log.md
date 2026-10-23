@@ -2,6 +2,20 @@
 
 Newest first.
 
+## 2026-10-23: liveness (M3), optional modules, Docker image
+
+- Modules switch on from their sources: liveness with `index_node_url`, the REO meter with
+  `indexer_address` plus the TAP database. A graph-node with no indexer (a fisherman's rig) runs
+  liveness alone.
+- Liveness: one index-node read per tick; a deployment behind and still gets an `eth_getLogs`
+  probe over its manifest's static addresses and topic0s (graph-node's own topic rule), which
+  separates frozen from idle. Block handlers count as always active; templates and non-EVM
+  sources can only ever be "not moving". Findings: `frozen`, `stalled`, `stopped`, `failed`,
+  `chain_stalled`, `index_node_down`. Optional graphman restart, off by default.
+- Page: a status line across modules, a Deployments table worst first; REO sections only when
+  the meter runs.
+- Dockerfile: static musl, 36 MB image. `rust-version = 1.94` (sqlx 0.9).
+
 ## 2026-10-23: dashboard, Telegram and Discord, lighthouse mark
 
 - Bare `graph-sentinel` runs the daemon and serves its dashboard on `listen` (loopback by

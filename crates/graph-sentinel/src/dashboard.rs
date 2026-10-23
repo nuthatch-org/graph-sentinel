@@ -61,6 +61,7 @@ pub struct Snapshot {
     pub network: Option<crate::network::IndexerView>,
     pub fisherman: Option<crate::network::FishermanView>,
     pub network_at: Option<DateTime<Utc>>,
+    pub payments: Option<crate::canary::View>,
     pub candidates_at: Option<DateTime<Utc>>,
 }
 

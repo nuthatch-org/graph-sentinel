@@ -1,0 +1,45 @@
+# graph-sentinel for the StakeSquid stack. Secrets come from .env, never this file.
+# Any key can also be set as GRAPH_SENTINEL_SECTION__KEY, e.g. GRAPH_SENTINEL_SOURCES__INDEX_NODE_URL.
+
+[sources]
+# Liveness: frozen, stalled and failed deployments.
+index_node_url = "http://index-node-0:8030/graphql"
+# Your indexer (staking) address. With the TAP database it turns on the REO meter;
+# with the gateway key it turns on the network view (allocations, POI deadlines, disputes).
+indexer_address = "0xYourIndexerAddress"
+# Env var holding a gateway API key for the network subgraph.
+network_subgraph_token_env = "GRAPH_API_KEY"
+# The TAP database URL is set in .env (GRAPH_SENTINEL_SOURCES__INDEXER_POSTGRES_URL).
+
+# RPC per chain, named as in graph-node's config.toml. Liveness uses them to tell a frozen
+# deployment from an idle one; "arbitrum-one" also lets the REO meter read the oracle contract.
+[sources.rpc]
+"arbitrum-one" = "https://arb1.arbitrum.io/rpc"
+# "mainnet" = "https://..."
+
+[outputs]
+# What messages and the page header call this host. Defaults to the indexer address.
+# name = "my-indexer"
+# Where you open the dashboard, linked from every notification.
+# public_url = "http://localhost:9477"
+
+[[outputs.notify]]
+kind = "telegram"
+bot_token_env = "TELEGRAM_BOT_TOKEN"
+chat_id = "123456789"
+
+[[outputs.notify]]
+kind = "discord"
+url_env = "DISCORD_WEBHOOK_URL"
+# Only critical findings here; the default is warn.
+min_severity = "critical"
+
+# RPC spend guard: prices graph-node's RPC calls against a daily budget.
+# [spend]
+# graph_node_metrics_url = "http://index-node-0:8040/metrics"
+# daily_budget_usd = 20
+# billed_providers = ["alchemy"]   # provider labels from graph-node's config.toml
+
+# Watch disputes you filed as a fisherman.
+# [network]
+# fisherman_address = "0x..."

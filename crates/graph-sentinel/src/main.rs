@@ -1,3 +1,4 @@
+mod canary;
 mod config;
 mod dashboard;
 mod findings;
@@ -358,7 +359,11 @@ async fn doctor(cfg: &Config) -> Result<()> {
         );
     }
 
-    if cfg.reo_enabled() && cfg.sources.rpc.contains_key(&cfg.reo.oracle_chain) {
+    if !cfg.reo_enabled() {
+        println!(
+            "skip  reo oracle         the REO meter is off (needs indexer_address and indexer_postgres_url)"
+        );
+    } else if cfg.sources.rpc.contains_key(&cfg.reo.oracle_chain) {
         ok &= line(
             "reo oracle",
             async {
@@ -385,7 +390,6 @@ async fn doctor(cfg: &Config) -> Result<()> {
 }
 
 const CANDIDATES_EVERY: Duration = Duration::from_secs(6 * 3600);
-const ORACLE_EVERY: Duration = Duration::from_secs(600);
 
 /// What every module task needs to publish its results.
 #[derive(Clone)]
@@ -465,14 +469,32 @@ async fn run(cfg: Config) -> Result<()> {
 
     let mut modules = Vec::new();
     if cfg.reo_enabled() {
-        let meter = Arc::new(open_meter(&cfg).await?);
-        let n = meter.backfill().await?;
-        tracing::info!(
-            new_rows = n,
-            "backfilled the served ledger from the receipt and RAV tables"
-        );
         modules.push("REO eligibility");
-        tokio::spawn(reo_loop(meter, cfg.clone(), shared.clone()));
+        let (c, sh) = (cfg.clone(), shared.clone());
+        tokio::spawn(async move {
+            // A database that is down at start-up is a source that is down, not a crash loop.
+            let meter = loop {
+                match open_meter(&c).await {
+                    Ok(m) => break Arc::new(m),
+                    Err(e) => {
+                        sh.source("indexer db", &Err(format!("{e:#}; retrying every 30 s")))
+                            .await;
+                        let _ = sh.publish().await;
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                    }
+                }
+            };
+            match meter.backfill().await {
+                Ok(n) => tracing::info!(
+                    new_rows = n,
+                    "backfilled the served ledger from the receipt and RAV tables"
+                ),
+                Err(e) => {
+                    tracing::warn!(error = %e, "backfill failed; the ledger fills from live receipts")
+                }
+            }
+            reo_loop(meter, c, sh).await
+        });
     }
     let mut guard_stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Some(sc) = cfg.spend.clone() {
@@ -491,6 +513,25 @@ async fn run(cfg: Config) -> Result<()> {
             shared.clone(),
             guard_stopped,
         ));
+    }
+    if cfg.tap_enabled() {
+        modules.push("payments");
+        let (c, st, sh, every) = (cfg.clone(), store.clone(), shared.clone(), cfg.tap.interval);
+        tokio::spawn(async move {
+            let canary = loop {
+                match canary::Canary::new(&c, st.clone()).await {
+                    Ok(Some(x)) => break x,
+                    Ok(None) => return,
+                    Err(e) => {
+                        sh.source("payments", &Err(format!("{e:#}; retrying every 30 s")))
+                            .await;
+                        let _ = sh.publish().await;
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                    }
+                }
+            };
+            canary_loop(canary, every, sh).await
+        });
     }
     if cfg.network_enabled() {
         modules.push("network");
@@ -522,6 +563,31 @@ async fn run(cfg: Config) -> Result<()> {
     tokio::signal::ctrl_c().await?;
     tracing::info!("shutting down");
     Ok(())
+}
+
+async fn canary_loop(mut c: canary::Canary, every: Duration, sh: Shared) {
+    let mut tick = tokio::time::interval(every);
+    loop {
+        tick.tick().await;
+        match c.tick().await {
+            Ok((view, found)) => {
+                let src = match &view.config_error {
+                    Some(e) => Err(format!("indexer-rs config unreadable: {e}")),
+                    None => Ok(format!("{} senders", view.senders.len())),
+                };
+                sh.source("payments", &src).await;
+                sh.snapshot.write().await.payments = Some(view);
+                if let Err(e) = sh.findings(sentinel_checks::tap::CHECK, found).await {
+                    tracing::warn!(error = %e, "recording payment findings failed");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "payment tick failed");
+                sh.source("payments", &Err(format!("{e:#}"))).await;
+                let _ = sh.publish().await;
+            }
+        }
+    }
 }
 
 async fn network_loop(w: network::NetworkWatch, every: Duration, sh: Shared) {
@@ -733,7 +799,7 @@ async fn refresh(
     if meter.has_oracle()
         && oracle
             .as_ref()
-            .is_none_or(|(t, _)| t.elapsed() > ORACLE_EVERY)
+            .is_none_or(|(t, _)| t.elapsed() > meter.oracle_interval())
     {
         let r = meter.on_chain().await;
         sh.source(

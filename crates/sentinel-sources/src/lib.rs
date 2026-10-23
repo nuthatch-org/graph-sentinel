@@ -1,3 +1,4 @@
+pub mod aggregator;
 pub mod graph_node;
 pub mod index_node;
 pub mod ipfs;

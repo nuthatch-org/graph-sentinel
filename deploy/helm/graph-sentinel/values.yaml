@@ -1,0 +1,77 @@
+image:
+  repository: ghcr.io/nuthatch-org/graph-sentinel
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# The package is private for now: a pull secret for ghcr.io is needed.
+imagePullSecrets: []
+
+# graph-sentinel.toml, mounted at /etc/graph-sentinel. Keep secrets out: use env/envFrom.
+# See docs/install.md for every module.
+config: |
+  [sources]
+  index_node_url = "http://graph-node-index:8030/graphql"
+  # indexer_address = "0x..."
+  # network_subgraph_token_env = "GRAPH_API_KEY"
+
+  [sources.rpc]
+  # "arbitrum-one" = "http://erpc:4000/arbitrum-one"
+
+  # [[outputs.notify]]
+  # kind = "telegram"
+  # bot_token_env = "TELEGRAM_BOT_TOKEN"
+  # chat_id = "123456789"
+
+# Secrets, e.g. a Secret holding GRAPH_SENTINEL_SOURCES__INDEXER_POSTGRES_URL,
+# GRAPH_API_KEY, TELEGRAM_BOT_TOKEN and DISCORD_WEBHOOK_URL:
+#   envFrom:
+#     - secretRef:
+#         name: graph-sentinel
+envFrom: []
+# Single variables, e.g. from a Secret key:
+#   env:
+#     - name: GRAPH_API_KEY
+#       valueFrom:
+#         secretKeyRef: {name: gateway, key: api-key}
+env: []
+
+# The REO ledger lives in /data, and receipt history starts when graph-sentinel does,
+# so losing the volume loses history.
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  size: 1Gi
+
+service:
+  type: ClusterIP
+  port: 9477
+
+serviceMonitor:
+  enabled: false
+  interval: 60s
+  labels: {}
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+podAnnotations: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

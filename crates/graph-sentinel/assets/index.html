@@ -180,6 +180,12 @@ section + section { border-top: 1px solid var(--border); }
 .f-sum { color: var(--text); }
 .f-meta { grid-column: 2; font-family: var(--mono); font-size: 0.72rem; color: var(--text-muted); }
 .empty { color: var(--text-muted); margin-top: 0.8rem; }
+.why { grid-column: 2; margin-top: 0.3rem; }
+.why summary { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--rust); cursor: pointer; width: fit-content; }
+.why summary:hover { text-decoration: underline; text-underline-offset: 3px; }
+.why dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 0.9rem; margin: 0.6rem 0 0.2rem; padding: 0.7rem 0.8rem; background: var(--bg-code); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.8rem; }
+.why dt { font-family: var(--mono); font-size: 0.72rem; color: var(--text-muted); }
+.why dd { margin: 0; font-family: var(--mono); font-size: 0.74rem; color: var(--text); overflow-wrap: anywhere; }
 .src { display: grid; grid-template-columns: auto 1fr auto; gap: 0.2rem 0.7rem; align-items: center; }
 .src .dot { margin-top: 1px; }
 .src .dot.down { background: var(--warn); }
@@ -318,6 +324,20 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
           <tbody id="deployments"></tbody>
         </table></div>
         <p class="note" id="live-note"></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="pay-sec" hidden>
+    <div class="wrap">
+      <p class="kicker">Payments</p>
+      <h2 id="pay-head">The payment path.</h2>
+      <div class="card">
+        <div class="table-wrap"><table>
+          <thead><tr><th>Sender</th><th>Aggregator</th><th class="num">Unaggregated</th><th>Oldest receipt</th><th class="num">Fees, 24 h</th><th class="num">Escrow for you</th></tr></thead>
+          <tbody id="senders"></tbody>
+        </table></div>
+        <p class="note" id="pay-note"></p>
       </div>
     </div>
   </section>
@@ -571,6 +591,10 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     if (s.spend && s.spend.stopped) head = 'RPC budget reached: graph-node is stopped until midnight UTC.';
     else if (count('dispute_against')) head = `${plural(count('dispute_against'), 'dispute has', 'disputes have')} been filed against this indexer.`;
     else if (count('index_node_down')) head = 'graph-node is not answering.';
+    else if (count('sender_denylisted')) head = 'Your tap-agent has denylisted a sender: queries are not being paid.';
+    else if (count('aggregator_down')) head = 'A TAP aggregator is down: fees are not being aggregated.';
+    else if (count('unknown_sender')) head = 'Receipts are arriving from a sender you will never be paid by.';
+    else if (count('rav_stalled')) head = 'tap-agent has stopped requesting RAVs.';
     else if (count('poi_stale')) head = 'Allocations are past the 28-day POI limit.';
     else if (frozen) head = `${plural(frozen, 'deployment is', 'deployments are')} frozen while reporting healthy.`;
     else if (ineligible) head = 'Ineligible for indexing rewards.';
@@ -755,6 +779,35 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     $('fish-note').textContent = `Filed from ${f.address}. An undecided dispute can be cancelled once its 28-day dispute period ends, which returns the bond. "Unknown" means the network subgraph's cancellable time is unusable for that dispute.`;
   }
 
+
+  // --- payments --------------------------------------------------------------
+  function renderPayments(s) {
+    const p = s.payments;
+    $('pay-sec').hidden = !p;
+    if (!p) return;
+    const bad = p.senders.filter((x) => x.denylisted || x.aggregator_ok === false || (!x.configured && x.recent)).length;
+    $('pay-head').textContent = bad ? `${plural(bad, 'sender has', 'senders have')} a broken payment path.`
+      : `${plural(p.senders.length, 'sender', 'senders')}, all paying.`;
+    const lim = p.limit_grt;
+    $('senders').innerHTML = p.senders.length ? p.senders.map((x) => {
+      const agg = x.denylisted ? '<span class="state crit">denylisted</span>'
+        : !x.configured ? '<span class="state crit">not in config</span>'
+        : x.aggregator_ok === false ? `<span class="state crit" title="${esc(x.aggregator_detail || '')}">down</span>`
+        : x.aggregator_ok ? '<span class="state good">answering</span>' : '<span class="state quiet">not probed</span>';
+      const ratio = lim ? x.unaggregated_grt / lim : 0;
+      const un = `${x.unaggregated_grt.toFixed(4)} GRT${lim ? ` <span class="${ratio >= 0.6 ? 'due-bad' : 'no'}">${Math.round(ratio * 100)}% of limit</span>` : ''}`;
+      const age = x.oldest_receipt_secs == null ? '<span class="no">none waiting</span>'
+        : x.oldest_receipt_secs < 120 ? `${x.oldest_receipt_secs} s` : `${Math.round(x.oldest_receipt_secs / 60)} min`;
+      return `<tr><td class="dep" title="${esc(x.sender)}">${esc(shortAny(x.sender))}</td><td>${agg}</td>
+        <td class="num">${un}</td><td class="dim">${age}</td>
+        <td class="num">${x.fees_24h_grt != null ? x.fees_24h_grt.toFixed(2) + ' GRT' : '<span class="no">counting</span>'}</td>
+        <td class="num">${x.escrow_grt != null ? num(x.escrow_grt) + ' GRT' : '<span class="no">not read</span>'}</td></tr>`;
+    }).join('') : '<tr><td colspan="6" class="no">No senders yet: no receipts, no RAVs, nothing configured.</td></tr>';
+    $('pay-note').innerHTML = p.config_error
+      ? `<span class="due-bad">indexer-rs config unreadable: ${esc(p.config_error)}</span>`
+      : `Unaggregated receipts are those no RAV covers yet; tap-agent denylists a sender when they reach <code>max_amount_willing_to_lose_grt</code>${lim ? ` (${lim} GRT here)` : ''}. Aggregators are probed as gRPC servers, which is how a Cloudflare error page gets caught.` + (p.config_read ? '' : ' Point <code>[tap] indexer_rs_config</code> at your config.toml to check senders, limits and the collector address.');
+  }
+
   // --- chart ---------------------------------------------------------------
   function renderChart(s) {
     const r = s.reo;
@@ -895,13 +948,33 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
   }
 
   // --- findings and sources ------------------------------------------------
+  // Open "why" panels survive the 30-second re-render.
+  const openWhy = new Set();
+  const label = (k) => k.replace(/_/g, ' ');
+  function evidenceRows(ev) {
+    if (!ev || typeof ev !== 'object') return '';
+    return Object.entries(ev).filter(([, v]) => v !== null && v !== undefined && v !== '').map(([k, v]) => {
+      let val;
+      if (Array.isArray(v)) val = v.length > 4 ? `${v.length} items: ${v.slice(0, 3).map((x) => typeof x === 'object' ? JSON.stringify(x) : x).join(', ')}…` : v.map((x) => typeof x === 'object' ? JSON.stringify(x) : x).join(', ');
+      else if (typeof v === 'object') val = JSON.stringify(v);
+      else if (typeof v === 'number') val = Number.isInteger(v) ? num(v) : v.toFixed(4);
+      else val = v;
+      return `<dt>${esc(label(k))}</dt><dd>${esc(val)}</dd>`;
+    }).join('');
+  }
   function renderFindings(s) {
     const f = [...s.findings].sort((a, b) => ['critical', 'warn', 'info'].indexOf(a.severity) - ['critical', 'warn', 'info'].indexOf(b.severity));
     $('findings').innerHTML = f.length ? f.map((x) => `
       <li><span class="tag ${esc(x.severity)}">${esc(x.severity)}</span>
         <span class="f-sum">${esc(x.summary)}</span>
-        <span class="f-meta">${esc(x.kind)} · first seen ${esc(ago(x.first_seen))}</span></li>`).join('')
+        <span class="f-meta">${esc(x.kind)} · first seen ${esc(ago(x.first_seen))}</span>
+        <details class="why" data-fp="${esc(x.fingerprint)}"${openWhy.has(x.fingerprint) ? ' open' : ''}>
+          <summary>Why?</summary><dl>${evidenceRows(x.evidence)}</dl>
+        </details></li>`).join('')
       : '<li class="empty">Nothing needs attention.</li>';
+    $('findings').querySelectorAll('details.why').forEach((d) => d.addEventListener('toggle', () => {
+      if (d.open) openWhy.add(d.dataset.fp); else openWhy.delete(d.dataset.fp);
+    }));
   }
 
   function renderSources(s) {
@@ -937,7 +1010,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     $('version').textContent = `graph-sentinel ${snap.version}`;
     $('reo-sec').hidden = !snap.reo;
     $('cand-sec').hidden = !snap.reo;
-    renderPrice(snap); renderStatus(snap); renderSpend(snap); renderDeployments(snap); renderNetwork(snap); renderFisherman(snap);
+    renderPrice(snap); renderStatus(snap); renderSpend(snap); renderDeployments(snap); renderPayments(snap); renderNetwork(snap); renderFisherman(snap);
     if (snap.reo) { renderReo(snap); renderChart(snap); renderRuns(snap); renderCandidates(snap); }
     renderFindings(snap); renderSources(snap);
   }

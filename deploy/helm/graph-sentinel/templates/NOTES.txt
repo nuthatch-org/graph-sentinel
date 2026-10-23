@@ -1,0 +1,7 @@
+The dashboard has no login. Reach it with a port-forward:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "graph-sentinel.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+
+then open http://127.0.0.1:{{ .Values.service.port }}. Check every source with:
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "graph-sentinel.fullname" . }} -- graph-sentinel doctor

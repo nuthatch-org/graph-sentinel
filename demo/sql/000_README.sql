@@ -1,0 +1,2 @@
+-- Vendored from graphprotocol/indexer-rs migrations at a74b6e3880d1c15f02a5f0eb7e95aba8555e0b72 (Apache-2.0).
+-- The demo stack runs them so the simulated tap-agent writes the same tables a real one does.

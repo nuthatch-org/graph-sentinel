@@ -27,6 +27,8 @@ const SCHEMA: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS spend (
         day TEXT NOT NULL, provider TEXT NOT NULL, method TEXT NOT NULL,
         requests INTEGER NOT NULL, cu INTEGER NOT NULL, PRIMARY KEY (day, provider, method))",
+    "CREATE TABLE IF NOT EXISTS rav_snap (ts INTEGER NOT NULL, payer TEXT NOT NULL, collection TEXT NOT NULL, grt REAL NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS rav_snap_ts ON rav_snap (ts)",
     "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS manifests (deployment TEXT PRIMARY KEY, activity TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS findings (
@@ -222,6 +224,45 @@ impl Store {
                 (d, by.get(&d.to_string()).copied().unwrap_or(0) as u64)
             })
             .collect())
+    }
+
+    /// Record cumulative RAV totals and return fees per payer over the last 24 hours (or since
+    /// the first snapshot, if younger), from the growth of each collection's total.
+    pub async fn rav_fees_24h(
+        &self,
+        now: i64,
+        totals: &[(String, String, f64)],
+    ) -> Result<HashMap<String, f64>> {
+        let mut tx = self.pool.begin().await?;
+        for (p, c, g) in totals {
+            sqlx::query("INSERT INTO rav_snap (ts, payer, collection, grt) VALUES (?, ?, ?, ?)")
+                .bind(now)
+                .bind(p)
+                .bind(c)
+                .bind(g)
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query("DELETE FROM rav_snap WHERE ts < ?")
+            .bind(now - 2 * 86_400)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        let rows: Vec<(String, f64)> = sqlx::query_as(
+            "SELECT payer, TOTAL(MAX(0.0, last - first)) FROM (
+                SELECT payer, collection,
+                       (SELECT grt FROM rav_snap s2 WHERE s2.payer = s.payer AND s2.collection = s.collection
+                          AND s2.ts >= ? ORDER BY ts ASC LIMIT 1) AS first,
+                       (SELECT grt FROM rav_snap s3 WHERE s3.payer = s.payer AND s3.collection = s.collection
+                          ORDER BY ts DESC LIMIT 1) AS last
+                FROM rav_snap s WHERE s.ts >= ? GROUP BY payer, collection
+             ) GROUP BY payer",
+        )
+        .bind(now - 86_400)
+        .bind(now - 86_400)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().collect())
     }
 
     pub async fn meta(&self, key: &str) -> Result<Option<String>> {

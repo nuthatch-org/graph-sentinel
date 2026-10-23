@@ -160,6 +160,94 @@ impl TapDb {
             .collect())
     }
 
+    /// Payers with a receipt or a RAV at or after `since_ns`. Receipts alone undercount:
+    /// aggregated ones are already deleted.
+    pub async fn recent_payers(&self, t: &Tables, since_ns: i64) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        if t.horizon_receipts {
+            out.extend(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT DISTINCT payer FROM tap_horizon_receipts WHERE timestamp_ns >= $1",
+                )
+                .bind(since_ns)
+                .fetch_all(&self.pool)
+                .await?,
+            );
+        }
+        if t.horizon_ravs {
+            out.extend(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT DISTINCT payer FROM tap_horizon_ravs WHERE timestamp_ns >= $1",
+                )
+                .bind(since_ns)
+                .fetch_all(&self.pool)
+                .await?,
+            );
+        }
+        Ok(out)
+    }
+
+    /// Per payer: receipts still in the table, their value in GRT, oldest and newest timestamp.
+    pub async fn unaggregated(&self, t: &Tables) -> Result<Vec<(String, i64, f64, i64, i64)>> {
+        if !t.horizon_receipts {
+            return Ok(vec![]);
+        }
+        let rows: Vec<(String, i64, String, i64, i64)> = sqlx::query_as(
+            "SELECT payer, COUNT(*), SUM(value)::text, MIN(timestamp_ns)::bigint, MAX(timestamp_ns)::bigint
+             FROM tap_horizon_receipts GROUP BY payer",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("reading unaggregated receipts")?;
+        Ok(rows
+            .into_iter()
+            .map(|(p, n, v, lo, hi)| (p, n, v.parse::<f64>().unwrap_or(0.0) / 1e18, lo, hi))
+            .collect())
+    }
+
+    /// Current cumulative RAV value per (payer, collection), in GRT.
+    pub async fn rav_totals(&self, t: &Tables) -> Result<Vec<(String, String, f64)>> {
+        if !t.horizon_ravs {
+            return Ok(vec![]);
+        }
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT payer, collection_id, value_aggregate::text FROM tap_horizon_ravs",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("reading RAV totals")?;
+        Ok(rows
+            .into_iter()
+            .map(|(p, c, v)| (p, c, v.parse::<f64>().unwrap_or(0.0) / 1e18))
+            .collect())
+    }
+
+    pub async fn denylist(&self) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        for sql in [
+            "SELECT sender_address FROM tap_horizon_denylist",
+            "SELECT sender_address FROM scalar_tap_denylist",
+        ] {
+            let table = if sql.contains("tap_horizon") {
+                "tap_horizon_denylist"
+            } else {
+                "scalar_tap_denylist"
+            };
+            let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+                .bind(table)
+                .fetch_one(&self.pool)
+                .await?;
+            if exists {
+                out.extend(
+                    sqlx::query_scalar::<_, String>(sql)
+                        .fetch_all(&self.pool)
+                        .await?,
+                );
+            }
+        }
+        Ok(out)
+    }
+
     /// Forward every receipt notification tap-agent's triggers emit. LISTEN needs no grant.
     /// Returns when the connection drops; the caller reconnects and rescans.
     pub async fn listen(&self, tx: mpsc::Sender<Served>) -> Result<()> {

@@ -1,0 +1,34 @@
+# graph-sentinel beside the StakeSquid graphprotocol-mainnet-docker stack.
+#   cp graph-sentinel.toml.example graph-sentinel.toml && cp .env.example .env
+#   docker compose up -d
+services:
+  graph-sentinel:
+    image: ghcr.io/nuthatch-org/graph-sentinel:${SENTINEL_VERSION:-latest}
+    container_name: graph-sentinel
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./graph-sentinel.toml:/etc/graph-sentinel/graph-sentinel.toml:ro
+      - sentinel-data:/data
+      # For the payment checks: indexer-rs's config.toml (shared by indexer-service and tap-agent).
+      # - /path/to/indexer-rs/config.toml:/etc/graph-sentinel/indexer-rs.toml:ro
+    ports:
+      # The page has no login: loopback only. Reach it over an SSH tunnel or your own proxy.
+      - "127.0.0.1:${SENTINEL_PORT:-9477}:9477"
+    networks:
+      - stack
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9477/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  sentinel-data:
+
+networks:
+  stack:
+    external: true
+    # Compose names it <directory>_monitor-net; check with `docker network ls`.
+    name: ${STACK_NETWORK:-graphprotocol-mainnet-docker_monitor-net}

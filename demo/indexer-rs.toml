@@ -1,0 +1,10 @@
+# The parts of an indexer-rs config.toml graph-sentinel reads. A real one has much more.
+[blockchain]
+chain_id = 42161
+receipts_verifier_address_v2 = "0x8f69F5C07477Ac46FBc491B1E6D91E2bb0111A9e"
+
+[tap]
+max_amount_willing_to_lose_grt = 2
+
+[tap.sender_aggregator_endpoints]
+0x6AA2Ace7Ec77C06C1DAb1b0aFaC9d56d9C9D0e50 = "http://sim:8080/aggregator"

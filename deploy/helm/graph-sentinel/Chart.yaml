@@ -1,0 +1,9 @@
+apiVersion: v2
+name: graph-sentinel
+description: Read-only sentinel for Graph Protocol indexers
+type: application
+version: 0.1.0
+appVersion: "0.0.1"
+home: https://github.com/nuthatch-org/graph-sentinel
+sources:
+  - https://github.com/nuthatch-org/graph-sentinel

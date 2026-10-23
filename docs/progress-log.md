@@ -2,6 +2,35 @@
 
 Newest first.
 
+## 2026-10-23: parked. Payment checks, demo stack, packaging
+
+State when parked:
+- **Payment checks (M2), built:** `crates/sentinel-checks/src/tap.rs` (8 tests) and
+  `crates/graph-sentinel/src/canary.rs`. Aggregator probed as a gRPC server (HTTP 200 +
+  `content-type: application/grpc` + a `grpc-status` header; verified against both live
+  aggregators), unknown sender, denylist, fees against `max_amount_willing_to_lose_grt`, RAV stall
+  (oldest unaggregated receipt while receipts flow), escrow via `PaymentsEscrow.getBalance` against
+  fees from RAV-total snapshots, indexer-rs config lint. Page section "Payments".
+- **Demo stack:** `demo/` (`docker compose up -d --build`, `./incident.sh <name>`, `./e2e.sh`).
+  `demo/sim/sim.py` impersonates graph-node, an RPC, the network subgraph, a TAP aggregator and
+  tap-agent over indexer-rs's vendored migrations. End-to-end so far: `freeze` raised in 15 s,
+  cleared in 30 s; `fail` raised in 15 s, cleared in 31 s. The other eight incidents in `e2e.sh`
+  were not yet measured when parked.
+- **Packaging:** `.github/workflows/release.yml` (multi-arch ghcr image + static binaries; never
+  run on GitHub), `deploy/compose/` (smoke-tested), `deploy/helm/` (lint + template only),
+  `docs/install.md`.
+- **Fixed:** start-up no longer exits when the TAP database is down (retries every 30 s); a missing
+  or directory config path is named; empty API-key env counts as unset; `doctor` says why the REO
+  oracle check is skipped; SQLite `MAX(0, x)` integer decode; URLs stripped from RPC, IPFS and
+  network-subgraph errors (keys live in them).
+- **Also:** findings carry a "Why?" drawer with their evidence; "Support my work <3" links to
+  GitHub Sponsors (footer, README, `.github/FUNDING.yml`).
+- **Not deployed:** Jimmy still runs the build from before the payment checks; it has no TAP
+  database, so nothing there changes until it is redeployed.
+
+Next, in order: finish `e2e.sh` and fix whatever it finds; POI checks (Module 2) proven on the
+osprey rig; a polish pass (empty states, first run, phone, light mode); then the demo recording.
+
 ## 2026-10-23: network view, disputes, Lodestar context
 
 - `[network]`: from the network subgraph, the indexer's provision, allocation, delegation and

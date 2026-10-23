@@ -11,13 +11,38 @@ activity, Rewards Eligibility Oracle shortfalls, and a broken payment path.
 
 Design: [RFC-0001](docs/RFC-0001-indexer-sentinel.md). Progress: [docs/progress-log.md](docs/progress-log.md).
 
-Status: pre-alpha. The REO meter (M1) is being built first, ahead of the oracle's step from 5 to 10
-subgraphs per day on 2026-10-27.
+Status: pre-alpha. Five modules run today: deployment liveness, payment checks, the REO meter, the
+network view (allocations, POI deadlines, disputes) and an RPC spend guard.
+
+## Try it without an indexer
+
+`demo/` runs a whole simulated indexer stack: graph-node, an RPC, the network subgraph, a TAP
+aggregator, and a tap-agent writing indexer-rs's real tables in Postgres. Then break it on cue.
+
+```sh
+cd demo && docker compose up -d --build
+open http://127.0.0.1:9477/
+./incident.sh                    # lists what you can break
+./incident.sh freeze             # a deployment stops while graph-node calls it healthy
+./incident.sh aggregator-down    # the aggregator serves a Cloudflare page instead of gRPC
+```
 
 ## Quick start
 
 It is a daemon with its own dashboard. You glance at the page; it messages you on Telegram or
 Discord when something needs attention. The CLI exists for scripts and debugging.
+
+Beside an existing Docker indexer stack (the full path, including Telegram and the read-only
+Postgres role, is [docs/install.md](docs/install.md)):
+
+```sh
+cd deploy/compose
+cp graph-sentinel.toml.example graph-sentinel.toml && cp .env.example .env   # then edit both
+docker compose up -d
+docker compose exec graph-sentinel graph-sentinel doctor
+```
+
+A fuller config:
 
 ```toml
 # graph-sentinel.toml
@@ -42,6 +67,8 @@ kind = "discord"
 url_env = "DISCORD_WEBHOOK_URL"
 min_severity = "critical"
 ```
+
+From source:
 
 ```sh
 export GRAPH_SENTINEL_SOURCES__INDEXER_POSTGRES_URL=postgres://readonly@host/indexer  # tap-agent's database

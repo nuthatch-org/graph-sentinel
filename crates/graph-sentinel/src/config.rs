@@ -22,6 +22,8 @@ pub struct Config {
     #[serde(default)]
     pub network: Network,
     #[serde(default)]
+    pub tap: Tap,
+    #[serde(default)]
     pub outputs: Outputs,
 }
 
@@ -61,6 +63,10 @@ fn default_network_subgraph() -> String {
 impl Config {
     pub fn reo_enabled(&self) -> bool {
         self.sources.indexer_address.is_some() && self.sources.tap_db_url().is_some()
+    }
+
+    pub fn tap_enabled(&self) -> bool {
+        self.tap.enabled && self.sources.tap_db_url().is_some()
     }
 
     pub fn network_enabled(&self) -> bool {
@@ -110,9 +116,11 @@ impl Sources {
     }
 
     pub fn network_subgraph_token(&self) -> Option<String> {
+        // An exported-but-empty variable is unset: an empty bearer header is rejected outright.
         self.network_subgraph_token_env
             .as_deref()
             .and_then(|v| std::env::var(v).ok())
+            .filter(|t| !t.trim().is_empty())
     }
 }
 
@@ -127,6 +135,9 @@ pub struct Reo {
     pub min_signal_grt: f64,
     pub oracle_address: Address,
     pub oracle_chain: String,
+    /// How long an on-chain eligibility reading is reused. The oracle posts once a day.
+    #[serde(with = "humantime_serde")]
+    pub oracle_interval: Duration,
     pub min_online_days: u32,
     pub window_days: i64,
     pub eligibility_days: i64,
@@ -144,6 +155,7 @@ impl Default for Reo {
                 .parse()
                 .expect("static"),
             oracle_chain: "arbitrum-one".into(),
+            oracle_interval: Duration::from_secs(600),
             min_online_days: r.min_online_days,
             window_days: r.window_days,
             eligibility_days: r.eligibility_days,
@@ -207,6 +219,42 @@ impl Liveness {
             activity_window_blocks: self.activity_window_blocks,
             idle_patience: self.idle_patience,
             chain_patience: self.chain_patience,
+        }
+    }
+}
+
+/// The payment-path canary; on whenever the indexer database is configured.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Tap {
+    pub enabled: bool,
+    #[serde(with = "humantime_serde")]
+    pub interval: Duration,
+    /// indexer-rs's config.toml (shared by indexer-service and tap-agent): senders, limits, lint.
+    pub indexer_rs_config: Option<PathBuf>,
+    pub escrow_address: Address,
+    /// Defaults to the collector in indexer-rs's config, else Arbitrum One's.
+    pub collector_address: Option<Address>,
+    /// Oldest unaggregated receipt older than this, while receipts flow, is a stalled RAV.
+    #[serde(with = "humantime_serde")]
+    pub rav_stall: Duration,
+    pub fees_warn_ratio: f64,
+    pub fees_critical_ratio: f64,
+}
+
+impl Default for Tap {
+    fn default() -> Self {
+        Tap {
+            enabled: true,
+            interval: Duration::from_secs(120),
+            indexer_rs_config: None,
+            escrow_address: "0xf6Fcc27aAf1fcD8B254498c9794451d82afC673E"
+                .parse()
+                .expect("static"),
+            collector_address: None,
+            rav_stall: Duration::from_secs(20 * 60),
+            fees_warn_ratio: 0.6,
+            fees_critical_ratio: 0.85,
         }
     }
 }
@@ -369,6 +417,19 @@ impl Channel {
 /// `graph-sentinel.toml`, overridden by `GRAPH_SENTINEL_SECTION__KEY` env vars, so secrets such as
 /// `GRAPH_SENTINEL_SOURCES__POSTGRES_URL` never need to sit in the file.
 pub fn load(path: &Path) -> Result<Config> {
+    // figment treats a missing file as empty, and compose turns a missing bind-mount source into
+    // a directory: both would surface later as "nothing to watch". Say what is actually wrong.
+    if !path.is_file() {
+        anyhow::bail!(
+            "no config file at {} ({}). Pass -c <path> or set GRAPH_SENTINEL_CONFIG.",
+            path.display(),
+            if path.is_dir() {
+                "it is a directory, as a missing compose bind mount becomes"
+            } else {
+                "not found"
+            }
+        );
+    }
     Figment::new()
         .merge(Toml::file(path))
         .merge(Env::prefixed("GRAPH_SENTINEL_").split("__"))

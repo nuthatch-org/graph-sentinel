@@ -29,6 +29,7 @@ pub struct Meter {
     indexer: Address,
     rules: Rules,
     min_signal_grt: f64,
+    oracle_interval: Duration,
 }
 
 /// How far back a scan looks: one oracle window plus the run day.
@@ -64,6 +65,7 @@ impl Meter {
             indexer,
             rules: cfg.reo.rules(),
             min_signal_grt: cfg.reo.min_signal_grt,
+            oracle_interval: cfg.reo.oracle_interval,
         })
     }
 
@@ -145,6 +147,10 @@ impl Meter {
 
     pub fn rules(&self) -> &Rules {
         &self.rules
+    }
+
+    pub fn oracle_interval(&self) -> Duration {
+        self.oracle_interval
     }
 
     pub fn has_oracle(&self) -> bool {

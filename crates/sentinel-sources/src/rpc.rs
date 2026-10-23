@@ -157,6 +157,23 @@ fn with_address(selector: &str, a: &Address) -> String {
     format!("0x{selector}{:0>64}", a.hex())
 }
 
+/// `PaymentsEscrow.getBalance(payer, collector, receiver)`: available escrow, GRT.
+pub async fn escrow_balance(
+    rpc: &Rpc,
+    escrow: &Address,
+    payer: &Address,
+    collector: &Address,
+    receiver: &Address,
+) -> Result<f64> {
+    let data = format!(
+        "0xd6bd603c{:0>64}{:0>64}{:0>64}",
+        payer.hex(),
+        collector.hex(),
+        receiver.hex()
+    );
+    Ok(rpc.word(escrow, data).await? as f64 / 1e18)
+}
+
 /// Read-only view of the RewardsEligibilityOracle (IRewardsEligibilityStatus).
 pub struct Reo<'a> {
     pub rpc: &'a Rpc,

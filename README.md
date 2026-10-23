@@ -1,4 +1,4 @@
-# lapwing
+# graph-sentinel
 
 A read-only sentinel an indexer runs beside graph-node, indexer-agent, indexer-service and
 tap-agent. It catches the failures that cost indexers money while every existing monitor shows
@@ -14,10 +14,10 @@ subgraphs per day on 2026-10-27.
 
 | Crate | Role |
 | --- | --- |
-| `lapwing` | binary: config, scheduler, local state, metrics, CLI |
-| `lapwing-sources` | Postgres, index-node, network subgraph and RPC clients |
-| `lapwing-checks` | the check modules; pure logic, tested against fixtures |
-| `lapwing-types` | `Finding`, `Severity`, ids |
+| `graph-sentinel` | binary: config, scheduler, local state, metrics, CLI |
+| `sentinel-sources` | Postgres, index-node, network subgraph and RPC clients |
+| `sentinel-checks` | the check modules; pure logic, tested against fixtures |
+| `sentinel-types` | `Finding`, `Severity`, ids |
 
 ## Licence
 

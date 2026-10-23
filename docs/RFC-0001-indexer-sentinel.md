@@ -4,13 +4,13 @@ Oct 22, 2026 · @pete
 
 ## Summary
 
-The sentinel (working name: **lapwing**, after the bird that mobs anything near its nest) is a single Rust daemon that an indexer runs beside graph-node, indexer-agent, indexer-service and tap-agent. It reads interfaces the stack already exposes and catches the four failures that cost indexers money in 2026 without anyone noticing: deployments that freeze while reporting healthy, POIs reused across epochs where the chain had activity, Rewards Eligibility Oracle (REO) ineligibility from serving too few qualifying subgraphs, and payment-path breakage (aggregator outages, sender rotations, self-inflicted denylists, frozen RAV requests).
+The sentinel (**graph-sentinel**; working name lapwing until 2026-10-23) is a single Rust daemon that an indexer runs beside graph-node, indexer-agent, indexer-service and tap-agent. It reads interfaces the stack already exposes and catches the four failures that cost indexers money in 2026 without anyone noticing: deployments that freeze while reporting healthy, POIs reused across epochs where the chain had activity, Rewards Eligibility Oracle (REO) ineligibility from serving too few qualifying subgraphs, and payment-path breakage (aggregator outages, sender rotations, self-inflicted denylists, frozen RAV requests).
 
 It changes nothing upstream, needs no protocol or peer adoption, and any single indexer can run it today. Inputs are read-only Postgres, the index-node status GraphQL, the network and Epoch Block Oracle subgraphs, the indexer's own RPC and the TAP aggregator endpoints. Outputs are a Prometheus endpoint, webhook alerts and a CLI. One optional write path exists: `graphman restart` on a confirmed-frozen deployment.
 
 Target: a usable first cut in two to three weeks, timed to the REO step from 5 to 10 qualifying subgraphs per day on 2026-10-27.
 
-**Status:** draft. **Scope:** v0.1. **Repo:** nuthatch-org/lapwing (proposed).
+**Status:** draft. **Scope:** v0.1. **Repo:** nuthatch-org/graph-sentinel (proposed).
 
 ## Motivation
 
@@ -42,10 +42,10 @@ The upstream fixes are partial and slow. A local daemon that cross-checks each o
 
 **Non-goals**
 
-- Replacing Grafana, Foghorn or Lodestar. Lapwing produces signals; those render them.
-- Cross-indexer POI comparison. That needs peers (Graphix, Subgraph Radio, both dormant). Lapwing checks the indexer's own POIs against the chain; peer comparison is a later opt-in.
+- Replacing Grafana, Foghorn or Lodestar. graph-sentinel produces signals; those render them.
+- Cross-indexer POI comparison. That needs peers (Graphix, Subgraph Radio, both dormant). graph-sentinel checks the indexer's own POIs against the chain; peer comparison is a later opt-in.
 - Allocation planning or optimisation. indexer-tools-v4 and Lodestar's simulator cover that.
-- Fixing graph-node. If a frozen runner needs a patch, the patch lives upstream or in `cargopete/graph-node`; lapwing only detects and restarts.
+- Fixing graph-node. If a frozen runner needs a patch, the patch lives upstream or in `cargopete/graph-node`; graph-sentinel only detects and restarts.
 - RPC proxying, caching or block-cache auditing. Separate projects (see the ideas report, items 5 and 6).
 - Acting on the chain. No transactions in any version.
 
@@ -53,7 +53,7 @@ The upstream fixes are partial and slow. A local daemon that cross-checks each o
 
 One process, one config file, one tick loop. Each check is a module that implements `Check::run(&Ctx) -> Vec<Finding>`; the scheduler runs them on their own intervals, dedupes findings against the last run, persists history to a local sqlite file, and routes new or escalated findings to the outputs.
 
-&#91;embedded content: lapwing architecture · 6 inputs, 4 checks, 4 outputs\]
+&#91;embedded content: graph-sentinel architecture · 6 inputs, 4 checks, 4 outputs\]
 
 Everything on the left is read-only. The daemon holds a Postgres role with `SELECT` on `subgraphs.*`, `chain*.*`, the `tap_horizon_*` tables and `scalar_tap_*` if present; it never writes to graph-node's database. The amber box is the only side effect and is gated behind `[liveness] restart = true` plus a confirmation window.
 
@@ -61,10 +61,10 @@ Everything on the left is read-only. The daemon holds a Postgres role with `SELE
 
 | Crate | Role | Main deps |
 | --- | --- | --- |
-| `lapwing` | binary: config, scheduler, outputs, CLI | tokio, clap, figment, axum (metrics), rusqlite |
-| `lapwing-sources` | typed clients: Postgres (sqlx), index-node GraphQL, network/EBO subgraph (graphql-client), RPC (alloy), aggregator health (tonic) | sqlx, alloy, tonic, reqwest |
-| `lapwing-checks` | the four modules behind one `Check` trait | depends on sources only |
-| `lapwing-types` | `Finding`, `Severity`, `DeploymentId`, `Epoch`, shared newtypes | serde |
+| `graph-sentinel` | binary: config, scheduler, outputs, CLI | tokio, clap, figment, axum (metrics), rusqlite |
+| `sentinel-sources` | typed clients: Postgres (sqlx), index-node GraphQL, network/EBO subgraph (graphql-client), RPC (alloy), aggregator health (tonic) | sqlx, alloy, tonic, reqwest |
+| `sentinel-checks` | the four modules behind one `Check` trait | depends on sources only |
+| `sentinel-types` | `Finding`, `Severity`, `DeploymentId`, `Epoch`, shared newtypes | serde |
 
 **Tick model**
 
@@ -147,19 +147,19 @@ The agent presents a POI roughly every 28 days and closes on fee collection. The
 
 **Mode A (v0.1): advisory**
 
-The module emits findings and a per-allocation gauge `lapwing_poi_verdict{allocation,deployment,verdict}`. The operator wires an alert on `suspect` and decides. Nothing is blocked.
+The module emits findings and a per-allocation gauge `graph_sentinel_poi_verdict{allocation,deployment,verdict}`. The operator wires an alert on `suspect` and decides. Nothing is blocked.
 
 **Mode B (v0.3, behind a flag): withhold**
 
-A reverse proxy in front of the index-node's `/graphql` status endpoint, pointed at by the agent's `--graph-node-status-endpoint`. It passes everything through except `proofOfIndexing` queries for allocations whose last verdict is `suspect`; for those it returns `null` with an `extensions.lapwing.reason` field. The agent's behaviour on a null POI must be verified on testnet before this ships (see Open questions). The proxy adds no caching and never touches query traffic, which goes to a different port.
+A reverse proxy in front of the index-node's `/graphql` status endpoint, pointed at by the agent's `--graph-node-status-endpoint`. It passes everything through except `proofOfIndexing` queries for allocations whose last verdict is `suspect`; for those it returns `null` with an `extensions.graph_sentinel.reason` field. The agent's behaviour on a null POI must be verified on testnet before this ships (see Open questions). The proxy adds no caching and never touches query traffic, which goes to a different port.
 
 **Pre-close hook**
 
-The agent can be configured to require a healthy POI through its own rules, but there is no hook for an external check. v0.2 adds `lapwing poi check <allocation>` as a CLI command that exits non-zero on `suspect`, so operators who close allocations through scripts or indexer-tools can gate on it.
+The agent can be configured to require a healthy POI through its own rules, but there is no hook for an external check. v0.2 adds `graph-sentinel poi check <allocation>` as a CLI command that exits non-zero on `suspect`, so operators who close allocations through scripts or indexer-tools can gate on it.
 
 **Peer comparison (later, opt-in)**
 
-If two or more indexers run lapwing on the same graph-node minor version, they can expose `publicProofsOfIndexing` over HTTPS and compare. This is a separate RFC; v0.1 only records the data needed.
+If two or more indexers run graph-sentinel on the same graph-node minor version, they can expose `publicProofsOfIndexing` over HTTPS and compare. This is a separate RFC; v0.1 only records the data needed.
 
 ## Module 3: REO eligibility meter
 
@@ -211,16 +211,16 @@ The ranking is advisory. It never allocates.
 
 | Name | Type | Labels |
 | --- | --- | --- |
-| `lapwing_reo_qualifying_deployments` | gauge | `day`, `method` (lower\_bound / estimate) |
-| `lapwing_reo_qualifying_days_28d` | gauge | `criteria` (current / 2026-10-27 / planned) |
-| `lapwing_reo_eligible` | gauge (0/1) | `criteria` |
-| `lapwing_reo_shortfall_deployments` | gauge | `criteria` |
+| `graph_sentinel_reo_qualifying_deployments` | gauge | `day`, `method` (lower\_bound / estimate) |
+| `graph_sentinel_reo_qualifying_days_28d` | gauge | `criteria` (current / 2026-10-27 / planned) |
+| `graph_sentinel_reo_eligible` | gauge (0/1) | `criteria` |
+| `graph_sentinel_reo_shortfall_deployments` | gauge | `criteria` |
 | `reo_at_risk` | finding, warn | days remaining, shortfall |
 | `reo_ineligible` | finding, critical | first ineligible day |
 
 **Daily rollup**
 
-At 00:05 UTC the meter freezes the previous day's counts into sqlite so a receipts table that is later pruned or rotated does not erase history. `lapwing reo history` prints the last 28 days.
+At 00:05 UTC the meter freezes the previous day's counts into sqlite so a receipts table that is later pruned or rotated does not erase history. `graph-sentinel reo history` prints the last 28 days.
 
 ## Module 4: payment-path canary
 
@@ -235,7 +235,7 @@ Every 2026 payment incident had a signature visible minutes before it cost anyth
 5. **Frozen RAV requester.** Per sender, track `max(timestamp_ns)` of receipts vs `max(updated_at)` of RAVs. If receipts keep arriving but no RAV has been requested for `rav_stall` (default 20 min while receipts flow), emit `rav_stalled` at `critical`. This is the indexer-rs #1094 signature.
 6. **Escrow headroom.** Read escrow balance per sender from the PaymentsEscrow contract via RPC on Arbitrum (or the escrow subgraph). Emit `escrow_low` at `warn` when balance < 2× the trailing 24 h fees. Low escrow means the gateway will throttle routing to you.
 7. **Config lint.** Parse indexer-service and tap-agent `config.toml`: `graph_tally_collector_address` not a placeholder, `escrow_subgraph` / `network_subgraph` URLs resolve and are synced, `trusted_senders` consistent across the two files, `max_amount_willing_to_lose_grt` not absurdly low. Emit `config_suspect` at `warn`. Run at startup and on file change (inotify).
-8. **Service self-check.** Probe indexer-service's own health endpoint and tap-agent's `/metrics`; scrape `tap_unaggregated_fees`, `tap_ravs_created_total` and friends so lapwing can corroborate its Postgres view and alert when tap-agent is simply down.
+8. **Service self-check.** Probe indexer-service's own health endpoint and tap-agent's `/metrics`; scrape `tap_unaggregated_fees`, `tap_ravs_created_total` and friends so graph-sentinel can corroborate its Postgres view and alert when tap-agent is simply down.
 
 **What it does not do**
 
@@ -245,13 +245,13 @@ It never modifies the denylist, config files or escrow. If an operator wants aut
 
 | Name | Type | Labels |
 | --- | --- | --- |
-| `lapwing_tap_aggregator_up` | gauge (0/1) | `sender`, `endpoint` |
-| `lapwing_tap_unaggregated_grt` | gauge | `sender` |
-| `lapwing_tap_unaggregated_ratio` | gauge (0–1 of threshold) | `sender` |
-| `lapwing_tap_rav_age_seconds` | gauge | `sender` |
-| `lapwing_tap_denylisted` | gauge (0/1) | `sender` |
-| `lapwing_tap_escrow_grt` | gauge | `sender` |
-| `lapwing_tap_unknown_senders` | gauge | – |
+| `graph_sentinel_tap_aggregator_up` | gauge (0/1) | `sender`, `endpoint` |
+| `graph_sentinel_tap_unaggregated_grt` | gauge | `sender` |
+| `graph_sentinel_tap_unaggregated_ratio` | gauge (0–1 of threshold) | `sender` |
+| `graph_sentinel_tap_rav_age_seconds` | gauge | `sender` |
+| `graph_sentinel_tap_denylisted` | gauge (0/1) | `sender` |
+| `graph_sentinel_tap_escrow_grt` | gauge | `sender` |
+| `graph_sentinel_tap_unknown_senders` | gauge | – |
 
 ## Configuration and deployment
 
@@ -259,7 +259,7 @@ One TOML file, every section optional except `[sources]`. A missing section disa
 
 ```toml
 [sources]
-postgres_url = "postgres://lapwing@localhost/graph-node"   # read-only role
+postgres_url = "postgres://graph-sentinel@localhost/graph-node"   # read-only role
 index_node_url = "http://graph-node:8030/graphql"
 network_subgraph_url = "https://gateway.thegraph.com/network" # or your own
 ebo_subgraph_url = "https://gateway.thegraph.com/ebo"
@@ -302,11 +302,11 @@ rav_stall = "20m"
 
 [outputs]
 metrics_listen = "0.0.0.0:9477"
-state_db = "/var/lib/lapwing/state.sqlite"
+state_db = "/var/lib/graph-sentinel/state.sqlite"
 
 [[outputs.webhook]]
 kind = "slack"
-url_env = "LAPWING_SLACK_URL"
+url_env = "GRAPH_SENTINEL_SLACK_URL"
 min_severity = "warn"
 
 [[outputs.webhook]]
@@ -318,22 +318,22 @@ min_severity = "info"
 **Postgres role**
 
 ```sql
-create role lapwing login password '…';
-grant connect on database "graph-node" to lapwing;
-grant usage on schema subgraphs, public to lapwing;
-grant select on all tables in schema subgraphs to lapwing;
+create role graph-sentinel login password '…';
+grant connect on database "graph-node" to graph-sentinel;
+grant usage on schema subgraphs, public to graph-sentinel;
+grant select on all tables in schema subgraphs to graph-sentinel;
 grant select on tap_horizon_receipts, tap_horizon_ravs, tap_horizon_denylist,
-  tap_horizon_escrow_accounts to lapwing;
+  tap_horizon_escrow_accounts to graph-sentinel;
 -- chain schemas (chain1, chain2, …) only if block-cache checks are enabled later
 ```
 
-On a sharded setup lapwing connects to the primary shard; the `subgraphs` schema lives there and it only needs per-deployment metadata, not entity tables.
+On a sharded setup graph-sentinel connects to the primary shard; the `subgraphs` schema lives there and it only needs per-deployment metadata, not entity tables.
 
 **Packaging**
 
-- Static musl binary, `ghcr.io/nuthatch-org/lapwing` image, `linux/amd64` and `linux/arm64`.
+- Static musl binary, `ghcr.io/nuthatch-org/graph-sentinel` image, `linux/amd64` and `linux/arm64`.
 - A Helm chart for Launchpad users (one Deployment, one Service, a ServiceMonitor, a ConfigMap, secrets via existing Launchpad conventions) and a docker-compose snippet for StakeMachine-style hosts.
-- `lapwing doctor` validates config, tests every source connection, and prints the Postgres grants it is missing. This is the first thing a new operator runs.
+- `graph-sentinel doctor` validates config, tests every source connection, and prints the Postgres grants it is missing. This is the first thing a new operator runs.
 
 **Resource budget**
 
@@ -345,17 +345,17 @@ The daemon speaks Prometheus, webhooks and a CLI. It does not have a web UI; Gra
 
 **Prometheus**
 
-All gauges above plus `lapwing_findings{check,severity}` (count of active findings), `lapwing_check_duration_seconds{check}`, `lapwing_source_up{source}` and `lapwing_build_info`. A bundled Grafana dashboard JSON and an Alertmanager rules file ship in the repo. Suggested default alerts:
+All gauges above plus `graph_sentinel_findings{check,severity}` (count of active findings), `graph_sentinel_check_duration_seconds{check}`, `graph_sentinel_source_up{source}` and `graph_sentinel_build_info`. A bundled Grafana dashboard JSON and an Alertmanager rules file ship in the repo. Suggested default alerts:
 
 | Alert | Expression | For |
 | --- | --- | --- |
-| LapwingFrozenDeployment | `lapwing_findings{check="liveness",severity="critical"} > 0` | 0m |
-| LapwingSuspectPOI | `lapwing_poi_verdict{verdict="suspect"} == 1` | 0m |
-| LapwingREOAtRisk | `lapwing_reo_shortfall_deployments{criteria="next"} > 0` | 1h |
-| LapwingAggregatorDown | `lapwing_tap_aggregator_up == 0` | 2m |
-| LapwingFeesNearLimit | `lapwing_tap_unaggregated_ratio > 0.6` | 0m |
-| LapwingRAVStalled | `lapwing_tap_rav_age_seconds > 1200 and rate(receipts) > 0` | 0m |
-| LapwingUnknownSender | `lapwing_tap_unknown_senders > 0` | 0m |
+| GraphSentinelFrozenDeployment | `graph_sentinel_findings{check="liveness",severity="critical"} > 0` | 0m |
+| GraphSentinelSuspectPOI | `graph_sentinel_poi_verdict{verdict="suspect"} == 1` | 0m |
+| GraphSentinelREOAtRisk | `graph_sentinel_reo_shortfall_deployments{criteria="next"} > 0` | 1h |
+| GraphSentinelAggregatorDown | `graph_sentinel_tap_aggregator_up == 0` | 2m |
+| GraphSentinelFeesNearLimit | `graph_sentinel_tap_unaggregated_ratio > 0.6` | 0m |
+| GraphSentinelRAVStalled | `graph_sentinel_tap_rav_age_seconds > 1200 and rate(receipts) > 0` | 0m |
+| GraphSentinelUnknownSender | `graph_sentinel_tap_unknown_senders > 0` | 0m |
 
 **Webhooks**
 
@@ -367,44 +367,44 @@ Rate limiting: at most one webhook per fingerprint per `min_repeat` (default 6 h
 
 | Command | What it prints |
 | --- | --- |
-| `lapwing run` | the daemon |
-| `lapwing doctor` | source connectivity, grants, config lint |
-| `lapwing status` | one table: every active finding, by check and severity |
-| `lapwing explain <finding-id>` | the evidence JSON, pretty-printed, and the exact queries and RPC calls that produced it |
-| `lapwing liveness <deployment>` | run the liveness check for one deployment now |
-| `lapwing poi check <allocation>` | run the POI gate for one allocation; exit 2 on `suspect` (for scripts) |
-| `lapwing poi history <allocation>` | `(epoch, poi, verdict)` rows |
-| `lapwing reo` | today's count, both methods, projection under each criteria set |
-| `lapwing reo candidates` | ranked deployments to add |
-| `lapwing reo history` | 28 days |
-| `lapwing tap` | aggregator status, senders, unaggregated fees, RAV ages, escrow |
+| `graph-sentinel run` | the daemon |
+| `graph-sentinel doctor` | source connectivity, grants, config lint |
+| `graph-sentinel status` | one table: every active finding, by check and severity |
+| `graph-sentinel explain <finding-id>` | the evidence JSON, pretty-printed, and the exact queries and RPC calls that produced it |
+| `graph-sentinel liveness <deployment>` | run the liveness check for one deployment now |
+| `graph-sentinel poi check <allocation>` | run the POI gate for one allocation; exit 2 on `suspect` (for scripts) |
+| `graph-sentinel poi history <allocation>` | `(epoch, poi, verdict)` rows |
+| `graph-sentinel reo` | today's count, both methods, projection under each criteria set |
+| `graph-sentinel reo candidates` | ranked deployments to add |
+| `graph-sentinel reo history` | 28 days |
+| `graph-sentinel tap` | aggregator status, senders, unaggregated fees, RAV ages, escrow |
 
 Every command has `--json`. `explain` exists so an operator can paste evidence into a forum thread or a dispute response without reconstructing it.
 
 ## Security, permissions, failure modes
 
-Lapwing is a monitor. The design goal is that a compromised or buggy lapwing can at worst produce wrong alerts and, if the operator opted in, restart a deployment that did not need restarting.
+graph-sentinel is a monitor. The design goal is that a compromised or buggy graph-sentinel can at worst produce wrong alerts and, if the operator opted in, restart a deployment that did not need restarting.
 
 **Permissions**
 
 - Postgres: `SELECT` only, on the schemas listed above. No `graph-node` superuser, no entity tables.
 - No operator key, no indexer key, no wallet. It reads the chain; it never signs.
-- `graphman restart` requires the graph-node config file and a Postgres role with write access. Lapwing does not hold that role itself; it execs the configured command, which runs under whatever credentials the operator gives that command (a wrapper script, a sidecar with its own secret). The restart path is off by default.
-- Mode B (withhold proxy) sits on the agent's status-endpoint path. It is a new point of failure for the agent, so it fails open: if lapwing cannot evaluate a POI it passes the query through unchanged. Only a positive `suspect` verdict withholds.
+- `graphman restart` requires the graph-node config file and a Postgres role with write access. graph-sentinel does not hold that role itself; it execs the configured command, which runs under whatever credentials the operator gives that command (a wrapper script, a sidecar with its own secret). The restart path is off by default.
+- Mode B (withhold proxy) sits on the agent's status-endpoint path. It is a new point of failure for the agent, so it fails open: if graph-sentinel cannot evaluate a POI it passes the query through unchanged. Only a positive `suspect` verdict withholds.
 - Webhook URLs come from env or files. Logs never print them.
 
-**Failure modes and what lapwing does**
+**Failure modes and what graph-sentinel does**
 
 | Failure | Behaviour |
 | --- | --- |
-| Postgres unreachable | all checks mark `source_down`, no other findings change state, `lapwing_source_up{source="postgres"}=0` |
+| Postgres unreachable | all checks mark `source_down`, no other findings change state, `graph_sentinel_source_up{source="postgres"}=0` |
 | index-node unreachable | liveness falls back to Postgres head only; POI gate reports `unavailable` |
 | RPC unreachable or rate-limited | liveness cannot confirm activity → stays at `frozen` (not `confirmed`), no restart; POI gate reports `unavailable` with reason; backoff with jitter |
 | Network subgraph stale or down | REO signal filter uses last cached values with an `stale_signal` note; sender list from config only |
 | Aggregator check times out | counted as a failure; two consecutive failures → `aggregator_down` |
 | sqlite state corrupt | rebuilt from scratch; history lost; one `warn` finding says so |
 | Clock skew | all day boundaries are UTC from the host clock; `doctor` checks NTP drift against the RPC's latest block timestamp |
-| lapwing itself crashes | systemd / k8s restarts it; findings are reloaded from sqlite so no duplicate first-sight alerts |
+| graph-sentinel itself crashes | systemd / k8s restarts it; findings are reloaded from sqlite so no duplicate first-sight alerts |
 
 **False positives to expect and how they are bounded**
 
@@ -421,14 +421,14 @@ All data stays on the indexer's host. Nothing is phoned home. If a later version
 
 Order is by money at risk divided by effort. The REO meter is smallest and has a hard date, so it ships first even though liveness is the deeper problem.
 
-&#91;embedded content: lapwing build plan · 4 milestones to v0.1, two follow-on releases\]
+&#91;embedded content: graph-sentinel build plan · 4 milestones to v0.1, two follow-on releases\]
 
 The dashed line is the REO step to 10 qualifying subgraphs per day. M1 is the only milestone with a deadline; the rest are estimates for one engineer working on this part-time alongside other work.
 
 | Milestone | Contents | Done when |
 | --- | --- | --- |
-| M0 scaffold + sources | workspace, config, scheduler, sqlite, metrics endpoint, Postgres / index-node / subgraph / RPC clients behind traits, `doctor` | `lapwing doctor` passes against a real StakeMachine or Launchpad host |
-| M1 REO meter | receipts rollup, signal cache, projection under multiple criteria, candidate ranking, `reo` CLI | a volunteer indexer's `lapwing reo` number matches their REO dashboard status for the last 7 days |
+| M0 scaffold + sources | workspace, config, scheduler, sqlite, metrics endpoint, Postgres / index-node / subgraph / RPC clients behind traits, `doctor` | `graph-sentinel doctor` passes against a real StakeMachine or Launchpad host |
+| M1 REO meter | receipts rollup, signal cache, projection under multiple criteria, candidate ranking, `reo` CLI | a volunteer indexer's `graph-sentinel reo` number matches their REO dashboard status for the last 7 days |
 | M2 TAP canary | aggregator probe, sender drift, denylist, fees ratio, RAV stall, escrow, config lint, `tap` CLI | replaying graph-support #30, #36 and #44 configs produces the expected findings in integration tests |
 | M3 liveness | manifest cache, activity probe, state machine, optional restart, `liveness` CLI | a deployment frozen with `pg_terminate_backend` on a test node is flagged within 2 ticks and restarted when enabled |
 | v0.1 | M0–M3 plus POI gate advisory mode, Grafana dashboard, Alertmanager rules, Helm chart, compose snippet, README | tagged, image published, two indexers running it |
@@ -439,24 +439,24 @@ The dashed line is the REO step to 10 qualifying subgraphs per day. M1 is the on
 
 - Unit tests per check against fixture structs (no network).
 - Integration tests with a docker-compose stack: graph-node v0.45.0, Postgres, a mock aggregator that can be told to return HTML, an anvil chain with a toy subgraph. The frozen-runner case is reproduced by killing the deployment's Postgres backend.
-- A `fixtures/incidents/` directory holding anonymised configs and table dumps for each graph-support incident lapwing claims to catch, with a test per incident.
+- A `fixtures/incidents/` directory holding anonymised configs and table dumps for each graph-support incident graph-sentinel claims to catch, with a test per incident.
 
 **Validation with real indexers**
 
-Two volunteers (one StakeMachine, one Launchpad) run v0.1 for two weeks in advisory-only mode. The acceptance question is simple: did lapwing say anything true that nothing else said first.
+Two volunteers (one StakeMachine, one Launchpad) run v0.1 for two weeks in advisory-only mode. The acceptance question is simple: did graph-sentinel say anything true that nothing else said first.
 
 ## Open questions and risks
 
 - [ ] **Agent behaviour on a null POI.** Does indexer-agent v0.25.x skip the action, retry, or submit a zero POI when `proofOfIndexing` returns null? Mode B depends on the answer. Needs a testnet run before v0.3; until then Mode B is not offered.
-- [ ] **REO criteria drift.** Criteria change about every two weeks. Lapwing ships the current set in config and the repo tracks changes, but an operator who does not update config will get wrong projections. Consider fetching ELIGIBILITY\_CRITERIA.md from GitHub on a schedule and warning when the local table is out of date.
+- [ ] **REO criteria drift.** Criteria change about every two weeks. graph-sentinel ships the current set in config and the repo tracks changes, but an operator who does not update config will get wrong projections. Consider fetching ELIGIBILITY\_CRITERIA.md from GitHub on a schedule and warning when the local table is out of date.
 - [ ] **Gateway-side latency is invisible locally.** The REO lower bound ignores latency and freshness; the estimate needs the query tap (v0.2). Until then, operators will see a number that can be higher than the oracle's. The metric name says `lower_bound` and the docs say why, but it will still surprise someone.
 - [ ] **Receipt column names.** `tap_horizon_receipts` schema differs between indexer-rs 2.0 and 2.2 (`collection_id` vs `allocation_id`, signer columns). Need a schema probe at startup and a compatibility matrix; test against 2.0.2, 2.1.0, 2.2.1.
 - [ ] **Epoch block resolution.** The agent takes the POI block from the EBO; the gate must use exactly the same block or verdicts are meaningless. Confirm by reading the agent's `resolvePOI` path and pinning the logic with a test against a known closed allocation.
-- [ ] **Manifest topic extraction.** Event signatures in the manifest are human-readable (`Transfer(indexed address,indexed address,uint256)`); lapwing must canonicalise and keccak them exactly as graph-node does, including tuple and indexed handling. Reuse graph-node's `EventSignature` parsing via a small vendored module or a crate dependency on `graph` if its API is stable enough.
+- [ ] **Manifest topic extraction.** Event signatures in the manifest are human-readable (`Transfer(indexed address,indexed address,uint256)`); graph-sentinel must canonicalise and keccak them exactly as graph-node does, including tuple and indexed handling. Reuse graph-node's `EventSignature` parsing via a small vendored module or a crate dependency on `graph` if its API is stable enough.
 - [ ] **Dynamic data sources.** Templates make the activity probe incomplete. Reading `subgraphs.dynamic_ethereum_contract_data_source` (or the v0.4x equivalent) from Postgres would give the actual address set. Worth doing in v0.2 if operators hit false `suspect_unknown` often.
 - [ ] **Restart safety.** `graphman restart` on a deployment that is mid-copy or mid-graft could be harmful. The copy-state check covers copies; confirm the graft case and the behaviour on a deployment with a pending `unassign`.
-- [ ] **Name.** Lapwing is a placeholder. Check for collisions in the ecosystem before publishing.
-- [ ] **Adoption.** Indexers are tired of sidecars. The pitch has to be one binary, one config, and a finding on day one that saved them something. The REO meter is the day-one finding; make sure `lapwing reo` works with nothing but a Postgres URL and an indexer address.
+- [x] **Name.** Settled as graph-sentinel on 2026-10-23.
+- [ ] **Adoption.** Indexers are tired of sidecars. The pitch has to be one binary, one config, and a finding on day one that saved them something. The REO meter is the day-one finding; make sure `graph-sentinel reo` works with nothing but a Postgres URL and an indexer address.
 
 **Risks**
 
@@ -586,12 +586,12 @@ with the body above, these win.
    `tap_horizon_receipts` rows in the RAV's timestamp range, so counting a past day from the table
    undercounts. The meter keeps its own per-day ledger fed by `LISTEN
    tap_horizon_receipt_notification` (tap-agent's own channel, no grant needed), a periodic scan,
-   and each RAV's `timestamp_ns`. History begins when lapwing starts.
+   and each RAV's `timestamp_ns`. History begins when graph-sentinel starts.
 4. **The window is 29 calendar days.** The run on day D reads `day_partition BETWEEN D-28 AND D`
    inclusive, and runs at about 10:00 UTC, so day D is partial.
 5. **TAP tables may live in a different database from graph-node's.** `[sources]` takes
    `indexer_postgres_url` alongside `postgres_url`.
 6. **On-chain eligibility is read directly.** `RewardsEligibilityOracle` on Arbitrum One
    (`0x02753BaE61C08AbD4351Bce7F48524935C2Cc78E`) exposes `isEligible(address)`,
-   `getEligibilityRenewalTime(address)` and `getLastOracleUpdateTime()`; `lapwing reo` reports
+   `getEligibilityRenewalTime(address)` and `getLastOracleUpdateTime()`; `graph-sentinel reo` reports
    these beside the projection, and the chain is authoritative for "ineligible now".

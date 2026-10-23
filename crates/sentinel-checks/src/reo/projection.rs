@@ -51,7 +51,7 @@ pub struct Projection {
 }
 
 /// Run the oracle forward from today under the schedule. Past runs inside the eligibility
-/// period are recomputed from the same counts, so history lapwing never saw counts as zero.
+/// period are recomputed from the same counts, so history graph-sentinel never saw counts as zero.
 pub fn project(
     counts: &DailyCounts,
     rules: &Rules,

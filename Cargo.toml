@@ -6,4 +6,4 @@ members = ["crates/*"]
 version = "0.0.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/nuthatch-org/lapwing"
+repository = "https://github.com/nuthatch-org/graph-sentinel"

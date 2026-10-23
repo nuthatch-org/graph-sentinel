@@ -5,11 +5,11 @@ pub mod ranking;
 pub mod rules;
 
 use chrono::{DateTime, NaiveDate, Utc};
-use lapwing_types::{Finding, Severity};
+use sentinel_types::{Finding, Severity};
 use serde::Serialize;
 use serde_json::json;
 
-use projection::{Assumption, DailyCounts, Projection, project, typical};
+use projection::{Assumption, DailyCounts, Projection, judge, project, typical};
 use rules::Rules;
 
 pub const CHECK: &str = "reo";
@@ -27,11 +27,16 @@ pub struct OnChain {
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
     pub today: NaiveDate,
-    /// First day lapwing has receipts for; the projection treats earlier days as empty.
+    /// First day graph-sentinel has receipts for; the projection treats earlier days as empty.
     pub observed_since: Option<NaiveDate>,
     pub today_count: u32,
     pub typical_count: u32,
     pub subgraphs_per_day_now: u32,
+    pub min_online_days: u32,
+    /// Days in today's window that count under today's minimum.
+    pub qualifying_days_now: u32,
+    /// The same window judged under the next step's minimum.
+    pub qualifying_days_next: Option<u32>,
     pub next_step: Option<rules::Step>,
     /// Extra deployments per day needed to meet the next step at the typical count.
     pub shortfall_next: u32,
@@ -57,6 +62,12 @@ pub fn report(
         today_count: counts.get(&today).copied().unwrap_or(0),
         typical_count,
         subgraphs_per_day_now: rules.subgraphs_per_day_at(today),
+        min_online_days: rules.min_online_days,
+        qualifying_days_now: judge(counts, rules, today, rules.subgraphs_per_day_at(today))
+            .qualifying_days,
+        qualifying_days_next: next_step
+            .as_ref()
+            .map(|s| judge(counts, rules, today, s.subgraphs_per_day).qualifying_days),
         shortfall_next: target.saturating_sub(typical_count),
         next_step,
         if_traffic_holds: project(counts, rules, today, Assumption::Hold(typical_count), 14),
@@ -69,8 +80,8 @@ pub fn report(
 /// projection is what warns ahead of time.
 pub fn findings(r: &Report, now: DateTime<Utc>) -> Vec<Finding> {
     let mut out = Vec::new();
-    if let Some(c) = &r.on_chain {
-        if !c.eligible {
+    if let Some(c) = &r.on_chain
+        && !c.eligible {
             out.push(Finding::new(
                 CHECK,
                 "reo_ineligible",
@@ -81,7 +92,6 @@ pub fn findings(r: &Report, now: DateTime<Utc>) -> Vec<Finding> {
                 now,
             ));
         }
-    }
     let p = &r.if_traffic_holds;
     if let Some(fail) = p.first_failing_run {
         let days_left = p.eligible_until.map(|u| (u - r.today).num_days());

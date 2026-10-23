@@ -1,6 +1,6 @@
 use std::cmp::Reverse;
 
-use lapwing_types::DeploymentId;
+use sentinel_types::DeploymentId;
 use serde::Serialize;
 
 /// A deployment the indexer is not currently serving, with what the ranking needs to know.

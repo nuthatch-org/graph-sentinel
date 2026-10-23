@@ -494,6 +494,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     const frozen = count('frozen'), failed = count('failed'), still = count('stalled', 'stopped');
     const chains = f.filter((x) => x.kind === 'chain_stalled').map((x) => x.subject);
     const ineligible = r && r.on_chain && !r.on_chain.eligible;
+    const down = s.sources.filter((x) => !x.up && !/^(telegram|discord|slack|webhook)/.test(x.name)).map((x) => x.name);
 
     let head;
     if (count('index_node_down')) head = 'graph-node is not answering.';
@@ -503,6 +504,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     else if (r && r.if_traffic_holds.first_failing_run) head = reoHeadline(r);
     else if (chains.length) head = `The ${chains.join(' and ')} chain head ${chains.length > 1 ? 'have' : 'has'} stopped.`;
     else if (still) head = `${plural(still, 'deployment is', 'deployments are')} not moving.`;
+    else if (down.length) head = `Cannot reach the ${down.join(' or the ')}.`;
     else if (deps || r) head = 'Nothing needs attention.';
     else head = 'Waiting for the first tick.';
     $('headline').textContent = head;

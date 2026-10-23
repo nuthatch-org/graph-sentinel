@@ -56,7 +56,7 @@ impl Meter {
             tap,
             tables,
             network: NetworkSubgraph::new(
-                cfg.sources.network_subgraph_url.clone(),
+                cfg.sources.network_subgraph(),
                 cfg.sources.network_subgraph_token(),
             ),
             graph_node,

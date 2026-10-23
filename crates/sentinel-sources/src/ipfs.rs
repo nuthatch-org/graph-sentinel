@@ -27,8 +27,9 @@ impl Ipfs {
             .timeout(std::time::Duration::from_secs(30))
             .send()
             .await
-            .context("ipfs cat")?
-            .error_for_status()?;
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| e.without_url())
+            .context("ipfs cat")?;
         let b = r.bytes().await?;
         if b.len() > MAX_BYTES {
             bail!("{hash}: {} bytes is too large for a manifest", b.len());

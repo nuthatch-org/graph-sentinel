@@ -329,7 +329,7 @@ async fn doctor(cfg: &Config) -> Result<()> {
             "network subgraph",
             async {
                 let n = NetworkSubgraph::new(
-                    cfg.sources.network_subgraph_url.clone(),
+                    cfg.sources.network_subgraph(),
                     cfg.sources.network_subgraph_token(),
                 );
                 let block = n.block_number().await?;

@@ -65,7 +65,7 @@ impl NetworkWatch {
     pub fn new(cfg: &Config) -> Self {
         NetworkWatch {
             subgraph: NetworkSubgraph::new(
-                cfg.sources.network_subgraph_url.clone(),
+                cfg.sources.network_subgraph(),
                 cfg.sources.network_subgraph_token(),
             ),
             lodestar: Lodestar::new(cfg.network.lodestar_url.clone()),

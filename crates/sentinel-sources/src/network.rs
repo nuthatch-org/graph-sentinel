@@ -81,13 +81,16 @@ impl NetworkSubgraph {
         if let Some(b) = &self.bearer {
             req = req.bearer_auth(b);
         }
+        // The URL often carries the API key in its path: keep it out of every error.
         let resp: Gql<T> = req
             .send()
             .await
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| e.without_url())
             .context("network subgraph request")?
-            .error_for_status()?
             .json()
             .await
+            .map_err(|e| e.without_url())
             .context("network subgraph response")?;
         if let Some(e) = resp.errors.filter(|e| !e.is_empty()) {
             bail!("network subgraph errors: {}", serde_json::Value::from(e));

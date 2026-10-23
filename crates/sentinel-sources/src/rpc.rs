@@ -33,10 +33,12 @@ impl Rpc {
             .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }))
             .send()
             .await
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| e.without_url())
             .with_context(|| format!("{method} request"))?
-            .error_for_status()?
             .json()
-            .await?;
+            .await
+            .map_err(|e| e.without_url())?;
         if let Some(e) = r.error {
             bail!("{method}: {e}");
         }
@@ -97,10 +99,12 @@ impl Rpc {
             .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }))
             .send()
             .await
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| e.without_url())
             .with_context(|| format!("{method} request"))?
-            .error_for_status()?
             .json()
-            .await?;
+            .await
+            .map_err(|e| e.without_url())?;
         if let Some(e) = r.error {
             bail!("{method}: {e}");
         }

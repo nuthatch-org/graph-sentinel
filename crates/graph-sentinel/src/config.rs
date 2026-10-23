@@ -41,6 +41,9 @@ pub struct Sources {
     pub network_subgraph_url: String,
     /// Env var holding a bearer token for the network subgraph, if it needs one.
     pub network_subgraph_token_env: Option<String>,
+    /// Take the URL from another tool's TOML, `path#dotted.key`, read in place, e.g.
+    /// `/home/pepe/osprey/osprey.toml#network_subgraph.url`. Wins over `network_subgraph_url`.
+    pub network_subgraph_url_from_toml: Option<String>,
     /// Chain name (as graph-node names it) → RPC URL.
     #[serde(default)]
     pub rpc: HashMap<String, String>,
@@ -87,6 +90,23 @@ impl Sources {
         self.indexer_postgres_url
             .as_deref()
             .or(self.postgres_url.as_deref())
+    }
+
+    /// The network subgraph URL, resolving `network_subgraph_url_from_toml` when set.
+    pub fn network_subgraph(&self) -> String {
+        self.network_subgraph_url_from_toml
+            .as_deref()
+            .and_then(|spec| {
+                let (path, key) = spec.split_once('#')?;
+                match Figment::from(Toml::file(path)).extract_inner::<String>(key) {
+                    Ok(u) => Some(u),
+                    Err(e) => {
+                        tracing::warn!(%path, %key, error = %e, "network_subgraph_url_from_toml unreadable");
+                        None
+                    }
+                }
+            })
+            .unwrap_or_else(|| self.network_subgraph_url.clone())
     }
 
     pub fn network_subgraph_token(&self) -> Option<String> {

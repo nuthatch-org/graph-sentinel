@@ -1,25 +1,31 @@
 mod config;
+mod dashboard;
 mod findings;
 mod meter;
+mod notify;
 mod outputs;
 mod store;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::Utc;
 use clap::{Parser, Subcommand};
-use sentinel_checks::reo::{self, Report};
+use sentinel_checks::reo::{self, OnChain, Report};
 use sentinel_sources::graph_node::GraphNodeDb;
 use sentinel_sources::index_node::IndexNode;
 use sentinel_sources::network::NetworkSubgraph;
 use sentinel_sources::rpc::Rpc;
 use sentinel_sources::tap::TapDb;
+use tokio::sync::RwLock;
 
 use crate::config::Config;
+use crate::dashboard::Snapshot;
 use crate::meter::Meter;
-use crate::outputs::{Metrics, Notifier};
+use crate::notify::Notifier;
+use crate::outputs::Metrics;
 use crate::store::Store;
 
 #[derive(Parser)]
@@ -36,13 +42,14 @@ struct Cli {
     /// Machine-readable output.
     #[arg(long, global = true)]
     json: bool,
+    /// With no command, run the daemon and its dashboard.
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Run the daemon.
+    /// Run the daemon and serve the dashboard (the default).
     Run,
     /// Test every configured source and say what is missing.
     Doctor,
@@ -80,7 +87,7 @@ async fn main() -> Result<()> {
         .init();
     let cli = Cli::parse();
     let cfg = config::load(&cli.config)?;
-    match cli.cmd {
+    match cli.cmd.unwrap_or(Cmd::Run) {
         Cmd::Run => run(cfg).await,
         Cmd::Doctor => doctor(&cfg).await,
         Cmd::Status => status(&cfg, cli.json).await,
@@ -342,18 +349,38 @@ async fn doctor(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
+const CANDIDATES_EVERY: Duration = Duration::from_secs(6 * 3600);
+const ORACLE_EVERY: Duration = Duration::from_secs(600);
+
 async fn run(cfg: Config) -> Result<()> {
     let metrics = Arc::new(Metrics::new());
-    if let Some(addr) = cfg.outputs.metrics_listen {
-        let m = metrics.clone();
+    let meter = Arc::new(open_meter(&cfg).await?);
+    let notifier = Notifier::new(
+        &cfg.outputs.notify,
+        meter.indexer().to_string(),
+        cfg.outputs.public_url.clone(),
+    );
+    if notifier.is_empty() {
+        tracing::warn!("no [[outputs.notify]] channel: findings show on the dashboard only");
+    } else if cfg.outputs.announce_start {
+        notifier.announce().await;
+    }
+    let snapshot = Arc::new(RwLock::new(Snapshot {
+        version: env!("CARGO_PKG_VERSION"),
+        indexer: meter.indexer().to_string(),
+        steps: meter.rules().steps.clone(),
+        graph_node: cfg.sources.postgres_url.is_some(),
+        ..Snapshot::default()
+    }));
+    if let Some(addr) = cfg.outputs.listen {
+        let (s, m) = (snapshot.clone(), metrics.clone());
         tokio::spawn(async move {
-            if let Err(e) = outputs::serve(addr, m).await {
-                tracing::error!(error = %e, "metrics endpoint stopped");
+            if let Err(e) = dashboard::serve(addr, s, m).await {
+                tracing::error!(error = %e, "dashboard stopped");
             }
         });
     }
-    let notifier = Notifier::new(&cfg.outputs.webhook);
-    let meter = Arc::new(open_meter(&cfg).await?);
+
     let n = meter.backfill().await?;
     tracing::info!(
         new_rows = n,
@@ -363,39 +390,128 @@ async fn run(cfg: Config) -> Result<()> {
     let follower = meter.clone();
     tokio::spawn(async move { follower.follow().await });
 
+    // Candidates are a few seconds of network subgraph paging: refresh them rarely, apart.
+    let (m, s) = (meter.clone(), snapshot.clone());
+    tokio::spawn(async move {
+        let mut every = tokio::time::interval(CANDIDATES_EVERY);
+        loop {
+            every.tick().await;
+            let r = m.candidates(15).await;
+            let mut snap = s.write().await;
+            match r {
+                Ok(c) => {
+                    snap.candidates = Some(c);
+                    snap.candidates_at = Some(Utc::now());
+                }
+                Err(e) => tracing::warn!(error = %e, "ranking candidates failed"),
+            }
+        }
+    });
+
+    let mut oracle: Option<(Instant, Option<OnChain>)> = None;
     let mut scan = tokio::time::interval(cfg.reo.scan_interval);
     let mut judge = tokio::time::interval(cfg.reo.interval);
     loop {
-        tokio::select! {
-            _ = scan.tick() => {
-                let r = meter.scan(2).await;
-                metrics.source("indexer_db", r.is_ok());
-                if let Err(e) = r { tracing::warn!(error = %e, "receipt scan failed"); }
-            }
-            _ = judge.tick() => {
-                if let Err(e) = judge_reo(&meter, &metrics, &notifier).await {
-                    tracing::warn!(error = %e, "REO evaluation failed");
-                }
-            }
+        let evaluate = tokio::select! {
+            _ = scan.tick() => false,
+            _ = judge.tick() => true,
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!("shutting down");
                 return Ok(());
             }
+        };
+        let scanned = meter.scan(2).await;
+        metrics.source("indexer_db", scanned.is_ok());
+        snapshot.write().await.set_source(
+            "indexer db",
+            &scanned
+                .as_ref()
+                .map(|n| format!("receipts and RAVs scanned, {n} new"))
+                .map_err(|e| format!("{e:#}")),
+        );
+        if let Err(e) = refresh(
+            &meter,
+            &metrics,
+            &notifier,
+            &snapshot,
+            &mut oracle,
+            evaluate,
+        )
+        .await
+        {
+            tracing::warn!(error = %e, "REO refresh failed");
+            snapshot.write().await.reo_error = Some(format!("{e:#}"));
         }
     }
 }
 
-async fn judge_reo(meter: &Meter, metrics: &Metrics, notifier: &Notifier) -> Result<()> {
-    let refreshed = meter.refresh_allocations_if_needed().await;
-    metrics.source("network_subgraph", refreshed.is_ok());
-    refreshed?;
-    let report = meter.report().await?;
+/// Rebuild the report and the page. Findings and webhooks only on `evaluate` ticks.
+async fn refresh(
+    meter: &Meter,
+    metrics: &Metrics,
+    notifier: &Notifier,
+    snapshot: &RwLock<Snapshot>,
+    oracle: &mut Option<(Instant, Option<OnChain>)>,
+    evaluate: bool,
+) -> Result<()> {
+    let mapped = meter.refresh_allocations_if_needed().await;
+    metrics.source("network_subgraph", mapped.is_ok());
+    snapshot.write().await.set_source(
+        "network subgraph",
+        &mapped
+            .as_ref()
+            .map(|_| "allocations mapped".to_string())
+            .map_err(|e| format!("{e:#}")),
+    );
+
+    if meter.has_oracle()
+        && oracle
+            .as_ref()
+            .is_none_or(|(t, _)| t.elapsed() > ORACLE_EVERY)
+    {
+        let r = meter.on_chain().await;
+        metrics.source("oracle", r.is_ok());
+        snapshot.write().await.set_source(
+            "reo oracle",
+            &r.as_ref()
+                .map(|c| match c {
+                    Some(c) => format!(
+                        "last posted {}",
+                        c.last_oracle_update.format("%Y-%m-%d %H:%M UTC")
+                    ),
+                    None => String::new(),
+                })
+                .map_err(|e| format!("{e:#}")),
+        );
+        // Keep the last good reading through a failed one.
+        if let Ok(c) = r {
+            *oracle = Some((Instant::now(), c));
+        }
+    }
+    let on_chain = oracle.as_ref().and_then(|(_, c)| c.clone());
+
+    let counts = meter.counts().await?;
+    let report = meter.report_with(&counts, on_chain).await?;
     metrics.reo(&report);
-    let now = Utc::now();
-    let prev = meter.store.findings(reo::CHECK).await?;
-    let (stored, events) = findings::apply(prev, reo::findings(&report, now), now);
-    meter.store.save_findings(&stored).await?;
-    metrics.findings(&meter.store.active_findings().await?);
-    notifier.send(&events).await;
+
+    if evaluate {
+        let now = Utc::now();
+        let prev = meter.store.findings(reo::CHECK).await?;
+        let (stored, events) = findings::apply(prev, reo::findings(&report, now), now);
+        meter.store.save_findings(&stored).await?;
+        notifier.send(&events).await;
+    }
+    let active = meter.store.active_findings().await?;
+    metrics.findings(&active);
+
+    let mut snap = snapshot.write().await;
+    for (name, r) in notifier.statuses() {
+        snap.set_source(&name, &r);
+    }
+    snap.days = dashboard::window_days(&counts, report.today, meter.rules().window_days as u64);
+    snap.reo = Some(report);
+    snap.reo_error = None;
+    snap.findings = active;
+    snap.generated_at = Some(Utc::now());
     Ok(())
 }

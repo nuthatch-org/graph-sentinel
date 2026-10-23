@@ -106,48 +106,88 @@ impl Reo {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Outputs {
-    pub metrics_listen: Option<SocketAddr>,
+    /// Dashboard, `/api/snapshot` and `/metrics`. Loopback by default: the page has no login.
+    #[serde(alias = "metrics_listen")]
+    pub listen: Option<SocketAddr>,
+    /// Where the indexer reaches the dashboard, linked from every notification.
+    pub public_url: Option<String>,
     pub state_db: PathBuf,
-    pub webhook: Vec<Webhook>,
+    /// Post a short "now watching" message to every channel at start-up.
+    pub announce_start: bool,
+    #[serde(alias = "webhook")]
+    pub notify: Vec<Channel>,
 }
 
 impl Default for Outputs {
     fn default() -> Self {
         Outputs {
-            metrics_listen: Some(([0, 0, 0, 0], 9477).into()),
+            listen: Some(([127, 0, 0, 1], 9477).into()),
+            public_url: None,
             state_db: "graph-sentinel.sqlite".into(),
-            webhook: Vec::new(),
+            announce_start: true,
+            notify: Vec::new(),
         }
     }
 }
 
+/// One place notifications go. Secrets can come from `*_env` instead of the file.
 #[derive(Debug, Clone, Deserialize)]
-pub struct Webhook {
-    #[serde(default)]
-    pub kind: WebhookKind,
+pub struct Channel {
+    pub kind: ChannelKind,
+    /// Discord, Slack or generic webhook URL.
     pub url: Option<String>,
     pub url_env: Option<String>,
+    /// Telegram.
+    pub bot_token: Option<String>,
+    pub bot_token_env: Option<String>,
+    pub chat_id: Option<String>,
+    #[serde(default = "default_telegram_api")]
+    pub telegram_api: String,
     #[serde(default = "default_min_severity")]
     pub min_severity: Severity,
+}
+
+fn default_telegram_api() -> String {
+    "https://api.telegram.org".into()
 }
 
 fn default_min_severity() -> Severity {
     Severity::Warn
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum WebhookKind {
-    #[default]
-    Generic,
+pub enum ChannelKind {
+    Telegram,
+    Discord,
     Slack,
+    Generic,
 }
 
-impl Webhook {
+impl ChannelKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            ChannelKind::Telegram => "telegram",
+            ChannelKind::Discord => "discord",
+            ChannelKind::Slack => "slack",
+            ChannelKind::Generic => "webhook",
+        }
+    }
+}
+
+fn from_env(v: &Option<String>, env: &Option<String>) -> Option<String> {
+    v.clone()
+        .or_else(|| env.as_deref().and_then(|e| std::env::var(e).ok()))
+        .filter(|s| !s.is_empty())
+}
+
+impl Channel {
     pub fn resolved_url(&self) -> Option<String> {
-        self.url
-            .clone()
-            .or_else(|| self.url_env.as_deref().and_then(|v| std::env::var(v).ok()))
+        from_env(&self.url, &self.url_env)
+    }
+
+    pub fn resolved_bot_token(&self) -> Option<String> {
+        from_env(&self.bot_token, &self.bot_token_env)
     }
 }
 
@@ -183,6 +223,36 @@ mod tests {
                 10
             );
             assert_eq!(c.reo.scan_interval, Duration::from_secs(120));
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn notify_channels_parse_with_the_old_key() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(
+                "graph-sentinel.toml",
+                r#"
+                [sources]
+                indexer_address = "0xb43B2CCCceadA5292732a8C58ae134AdEFcE09Bb"
+                [[outputs.webhook]]
+                kind = "telegram"
+                bot_token_env = "TG_TOKEN"
+                chat_id = "-1001"
+                [[outputs.webhook]]
+                kind = "discord"
+                url = "https://discord.example/hook"
+                min_severity = "critical"
+                "#,
+            )?;
+            jail.set_env("TG_TOKEN", "123:abc");
+            let c = load(Path::new("graph-sentinel.toml")).expect("config");
+            assert_eq!(c.outputs.notify.len(), 2);
+            assert_eq!(
+                c.outputs.notify[0].resolved_bot_token().as_deref(),
+                Some("123:abc")
+            );
+            assert_eq!(c.outputs.notify[1].min_severity, Severity::Critical);
             Ok(())
         });
     }

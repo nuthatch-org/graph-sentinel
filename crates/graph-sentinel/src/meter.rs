@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{Days, Utc};
+use sentinel_checks::reo::projection::DailyCounts;
 use sentinel_checks::reo::ranking::{Candidate, rank};
 use sentinel_checks::reo::rules::Rules;
 use sentinel_checks::reo::{self, OnChain, Report};
@@ -114,11 +115,6 @@ impl Meter {
     }
 
     pub async fn report(&self) -> Result<Report> {
-        let today = Utc::now().date_naive();
-        let counts = self
-            .store
-            .daily_counts(today - Days::new(BACKFILL_DAYS + 1))
-            .await?;
         let on_chain = match self.on_chain().await {
             Ok(c) => c,
             Err(e) => {
@@ -126,10 +122,37 @@ impl Meter {
                 None
             }
         };
-        let mut r = reo::report(&counts, &self.rules, today, on_chain);
+        self.report_with(&self.counts().await?, on_chain).await
+    }
+
+    pub async fn counts(&self) -> Result<DailyCounts> {
+        let today = Utc::now().date_naive();
+        self.store
+            .daily_counts(today - Days::new(BACKFILL_DAYS + 1))
+            .await
+    }
+
+    pub async fn report_with(
+        &self,
+        counts: &DailyCounts,
+        on_chain: Option<OnChain>,
+    ) -> Result<Report> {
+        let mut r = reo::report(counts, &self.rules, Utc::now().date_naive(), on_chain);
         // The ledger knows only what graph-sentinel has seen; say where its memory starts.
         r.observed_since = self.store.first_day().await?;
         Ok(r)
+    }
+
+    pub fn rules(&self) -> &Rules {
+        &self.rules
+    }
+
+    pub fn indexer(&self) -> &Address {
+        &self.indexer
+    }
+
+    pub fn has_oracle(&self) -> bool {
+        self.oracle.is_some()
     }
 
     pub async fn candidates(&self, limit: usize) -> Result<Vec<Candidate>> {

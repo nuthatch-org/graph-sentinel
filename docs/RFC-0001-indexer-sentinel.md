@@ -595,3 +595,12 @@ with the body above, these win.
    (`0x02753BaE61C08AbD4351Bce7F48524935C2Cc78E`) exposes `isEligible(address)`,
    `getEligibilityRenewalTime(address)` and `getLastOracleUpdateTime()`; `graph-sentinel reo` reports
    these beside the projection, and the chain is authoritative for "ineligible now".
+7. **It has its own dashboard and speaks Telegram and Discord.** Decided 2026-10-23, reversing
+   the "no web UI" non-goal: the user is an indexer who glances at a page and wants a message
+   when something breaks, not a set of commands. The page is one embedded HTML file served by
+   the daemon (no frontend build), so the maintenance cost the non-goal guarded against stays
+   small. Running `graph-sentinel` with no arguments starts it. Prometheus and the CLI remain.
+8. **The oracle's posted runs are read from the chain, not projected.** Only runs after the
+   oracle's last post are projected; cover counts the on-chain renewal plus projected renewals.
+   A posted run the ledger says should have passed but the chain did not renew raises
+   `reo_oracle_disagrees`: the receipts are overstating what the oracle credits.

@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>graph-sentinel</title>
+<meta name="description" content="Read-only sentinel for a Graph indexer: REO eligibility, findings and sources.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%23171614%22/%3E%3Cpath d=%22M13.6 8.7 L31 2.6 L31 14.8 Z%22 fill=%22%23cd8560%22 opacity=%220.5%22/%3E%3Cpath d=%22M10.6 8.7 L3.5 6.6 L3.5 10.8 Z%22 fill=%22%23cd8560%22 opacity=%220.22%22/%3E%3Cpath d=%22M8.7 5.9 L12.1 2.5 L15.5 5.9 Z%22 fill=%22%238bb8dc%22/%3E%3Crect x=%229.4%22 y=%226.4%22 width=%225.4%22 height=%224.6%22 rx=%220.9%22 fill=%22%23ece9e3%22/%3E%3Crect x=%227.3%22 y=%2211.4%22 width=%229.6%22 height=%221.9%22 rx=%220.95%22 fill=%22%238bb8dc%22/%3E%3Cpath d=%22M9.2 13.9 H15 L17 29.2 H7.2 Z%22 fill=%22%238bb8dc%22/%3E%3Cpath d=%22M8.72 17.6 H15.48 L15.72 19.5 H8.48 Z%22 fill=%22%23cd8560%22/%3E%3Cpath d=%22M8.1 22.4 H16.1 L16.37 24.4 H7.83 Z%22 fill=%22%23cd8560%22/%3E%3C/svg%3E">
+<style>
+@font-face { font-family: 'Space Grotesk'; src: url('/fonts/space-grotesk.woff2') format('woff2'); font-weight: 300 700; font-display: swap; }
+@font-face { font-family: 'JetBrains Mono'; src: url('/fonts/jetbrains-mono.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+
+:root {
+  --bg: #171614; --bg-elev: #201f1c; --bg-code: #1b1a17; --bg-inset: #262420;
+  --border: rgba(255, 255, 255, 0.09); --border-hi: rgba(255, 255, 255, 0.16);
+  --text: #ece9e3; --text-muted: #9c978c; --text-faint: #6e6a61;
+  --accent: #8bb8dc; --accent-ink: #cfe3f2; --rust: #cd8560;
+  --ok: #86b592; --warn: #cdb06a;
+  --pale-blue-bg: rgba(139, 184, 220, 0.12); --pale-rust-bg: rgba(205, 133, 96, 0.12); --pale-green-bg: rgba(134, 181, 146, 0.12);
+  --maxw: 76rem; --radius: 10px; --radius-sm: 6px; --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --display: 'Space Grotesk', ui-sans-serif, system-ui, 'Helvetica Neue', sans-serif;
+  --sans: 'Space Grotesk', ui-sans-serif, system-ui, 'Helvetica Neue', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
+  color-scheme: dark;
+}
+:root[data-theme='light'] {
+  --bg: #fbfbfa; --bg-elev: #ffffff; --bg-code: #f7f6f3; --bg-inset: #f2f1ec;
+  --border: #eaeaea; --border-hi: rgba(0, 0, 0, 0.14);
+  --text: #2f3437; --text-muted: #706d69; --text-faint: #9a968e;
+  --accent: #1f6c9f; --accent-ink: #1a5680; --rust: #9d5433;
+  --ok: #346538; --warn: #8a6400;
+  --pale-blue-bg: #e1f3fe; --pale-rust-bg: #f7ebe4; --pale-green-bg: #edf3ec;
+  color-scheme: light;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: var(--sans); font-size: 16px; line-height: 1.6; letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; overflow-x: hidden;
+}
+h1, h2, h3 { font-family: var(--display); font-weight: 600; letter-spacing: -0.03em; line-height: 1.1; margin: 0; }
+h1 { font-size: clamp(1.9rem, 4.6vw, 3rem); max-width: 22ch; }
+h2 { font-size: clamp(1.3rem, 2.4vw, 1.6rem); }
+p { margin: 0; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+code, .mono { font-family: var(--mono); font-feature-settings: 'calt' 1; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.skip { position: absolute; left: -999px; top: 0; background: var(--text); color: var(--bg); padding: 0.6rem 1rem; z-index: 100; }
+.skip:focus { left: 0; }
+
+.kicker {
+  font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--rust); margin-bottom: 0.9rem;
+}
+.wrap { width: 100%; max-width: var(--maxw); margin-inline: auto; padding-inline: 1.5rem; }
+
+/* --- bar ---------------------------------------------------------------- */
+.bar {
+  position: sticky; top: 0; z-index: 10; height: 64px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 84%, transparent);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.bar .wrap { display: flex; align-items: center; gap: 1.25rem; height: 100%; }
+.brand { display: flex; align-items: center; gap: 0.6rem; font-weight: 600; letter-spacing: -0.02em; color: var(--text); }
+.brand svg { flex: none; }
+.chip {
+  font-family: var(--mono); font-size: 0.74rem; letter-spacing: 0.02em;
+  background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0.2rem 0.55rem; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw;
+}
+.bar .spacer { flex: 1; }
+.live { display: flex; align-items: center; gap: 0.5rem; font-family: var(--mono); font-size: 0.74rem; color: var(--text-muted); white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 9999px; background: var(--ok); flex: none; }
+.live .dot { animation: pulse 2.4s ease-in-out infinite; }
+.live.stale .dot { background: var(--warn); animation: none; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.theme {
+  font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase;
+  background: none; border: 1px solid var(--border); color: var(--text-muted);
+  border-radius: var(--radius-sm); padding: 0.3rem 0.55rem; cursor: pointer;
+  transition: border-color 0.18s var(--ease), color 0.18s var(--ease);
+}
+.theme:hover { border-color: var(--rust); color: var(--rust); }
+.theme:active { transform: scale(0.98); }
+
+/* --- sections ------------------------------------------------------------ */
+section { padding-block: clamp(2.5rem, 6vw, 4.5rem); }
+section + section { border-top: 1px solid var(--border); }
+.hero { padding-top: clamp(2rem, 5vw, 3.5rem); }
+.lede { color: var(--text-muted); font-size: 1.06rem; max-width: 60ch; margin-top: 1rem; }
+.lede strong { color: var(--text); font-weight: 600; }
+.error {
+  margin-top: 1rem; font-family: var(--mono); font-size: 0.82rem; color: var(--warn);
+  border: 1px solid var(--border); border-left: 2px solid var(--warn); background: var(--bg-elev);
+  padding: 0.7rem 0.9rem; border-radius: var(--radius-sm);
+}
+
+/* --- stat band ----------------------------------------------------------- */
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-top: 2rem;
+  background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.stat { background: var(--bg-elev); padding: 1.3rem 1.4rem 1.4rem; min-width: 0; }
+.stat .label { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); }
+.stat .value { font-family: var(--display); font-weight: 600; letter-spacing: -0.03em; line-height: 1.05;
+  font-size: clamp(2rem, 4vw, 2.7rem); margin-top: 0.6rem; font-variant-numeric: tabular-nums; }
+.stat .unit { font-family: var(--mono); font-size: 0.8rem; letter-spacing: 0.04em; color: var(--rust); margin-left: 0.35rem; font-weight: 400; }
+.stat .sub { color: var(--text-muted); font-size: 0.86rem; margin-top: 0.5rem; max-width: 30ch; }
+.stat .value.ok { color: var(--ok); }
+.stat .value.warn { color: var(--warn); }
+
+/* --- cards --------------------------------------------------------------- */
+.card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.4rem 1.5rem; margin-top: 1.25rem; min-width: 0; }
+.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
+.card-head .kicker { margin: 0; }
+.card h2 { margin-bottom: 0.3rem; }
+.note { color: var(--text-muted); font-size: 0.86rem; margin-top: 0.9rem; max-width: 72ch; }
+.note code, .lede code { font-size: 0.82em; background: var(--bg-inset); border-radius: 4px; padding: 0.05rem 0.35rem; color: var(--text); }
+
+.legend { display: flex; gap: 1.1rem; flex-wrap: wrap; font-family: var(--mono); font-size: 0.72rem; color: var(--text-muted); }
+.legend span { display: inline-flex; align-items: center; gap: 0.45rem; }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.sw.q { background: var(--accent); }
+.sw.b { background: var(--text-faint); }
+.sw.p { border: 1.5px dashed var(--accent); }
+.sw.line { height: 0; width: 16px; border-top: 2px solid var(--rust); border-radius: 0; }
+.sw.line.next { border-top-style: dashed; }
+
+.chart { position: relative; margin-top: 1rem; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart .tick { font-family: var(--mono); font-size: 11px; fill: var(--text-muted); }
+.chart .tick.today { fill: var(--rust); }
+.chart .lab { font-family: var(--mono); font-size: 11px; fill: var(--rust); }
+.chart .grid { stroke: var(--border); stroke-width: 1; }
+.chart .base { stroke: var(--border-hi); stroke-width: 1; }
+.chart .hit { fill: transparent; cursor: default; }
+.chart .hit:hover + .mark, .chart .mark.hover { opacity: 0.8; }
+.tip {
+  position: absolute; pointer-events: none; z-index: 5; min-width: 13rem;
+  background: var(--bg-code); border: 1px solid var(--border-hi); border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem; font-size: 0.82rem; color: var(--text); opacity: 0; transition: opacity 0.12s var(--ease);
+}
+.tip.on { opacity: 1; }
+.tip .t-day { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--rust); }
+.tip .t-val { font-family: var(--display); font-weight: 600; font-size: 1.25rem; letter-spacing: -0.02em; margin: 0.15rem 0 0.25rem; }
+.tip .t-row { color: var(--text-muted); font-family: var(--mono); font-size: 0.74rem; }
+
+/* --- run strip ----------------------------------------------------------- */
+.runs { display: grid; grid-template-columns: repeat(15, minmax(0, 1fr)); gap: 6px; margin-top: 1rem; }
+.run { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-code); padding: 0.55rem 0.4rem 0.6rem; text-align: center; min-width: 0; }
+.run .d { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; }
+.run .q { font-family: var(--display); font-weight: 600; font-size: 1.05rem; margin-top: 0.2rem; font-variant-numeric: tabular-nums; }
+.run .q small { font-family: var(--mono); font-weight: 400; font-size: 0.66rem; color: var(--text-muted); }
+.run .v { font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 0.2rem; }
+.run.pass .v { color: var(--ok); }
+.run.fail { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.run.fail .v { color: var(--warn); }
+.run.today { border-color: var(--rust); }
+.run.step .d { color: var(--rust); }
+
+/* --- findings and sources ------------------------------------------------ */
+.split { display: grid; grid-template-columns: 1.4fr 1fr; gap: 1.25rem; }
+.split .card { margin-top: 0; }
+.list { list-style: none; margin: 0.8rem 0 0; padding: 0; }
+.list li { display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 0.8rem; padding: 0.85rem 0; border-top: 1px solid var(--border); }
+.list li:first-child { border-top: 0; }
+.tag {
+  font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase;
+  border-radius: 4px; padding: 0.12rem 0.45rem; align-self: start; margin-top: 0.15rem; white-space: nowrap;
+}
+.tag.critical { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.tag.warn { color: var(--rust); background: var(--pale-rust-bg); }
+.tag.info { color: var(--text-muted); background: var(--bg-inset); }
+.f-sum { color: var(--text); }
+.f-meta { grid-column: 2; font-family: var(--mono); font-size: 0.72rem; color: var(--text-muted); }
+.empty { color: var(--text-muted); margin-top: 0.8rem; }
+.src { display: grid; grid-template-columns: auto 1fr auto; gap: 0.2rem 0.7rem; align-items: center; }
+.src .dot { margin-top: 1px; }
+.src .dot.down { background: var(--warn); }
+.src .name { font-family: var(--mono); font-size: 0.8rem; color: var(--text); }
+.src .ago { font-family: var(--mono); font-size: 0.72rem; color: var(--text-muted); }
+.src .detail { grid-column: 2 / 4; color: var(--text-muted); font-size: 0.82rem; overflow-wrap: anywhere; }
+
+/* --- candidates ---------------------------------------------------------- */
+.table-wrap { overflow-x: auto; margin-top: 0.8rem; }
+table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+th { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); font-weight: 400; text-align: left; padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--border-hi); white-space: nowrap; }
+td { padding: 0.6rem 0.7rem; border-bottom: 1px solid var(--border); white-space: nowrap; font-variant-numeric: tabular-nums; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; }
+td.dep { font-family: var(--mono); font-size: 0.8rem; color: var(--accent); }
+td .yes { color: var(--ok); font-family: var(--mono); font-size: 0.76rem; }
+td .no { color: var(--text-muted); font-family: var(--mono); font-size: 0.76rem; }
+tbody tr { transition: background-color 0.15s var(--ease); }
+tbody tr:hover { background: var(--bg-inset); }
+
+/* --- scope --------------------------------------------------------------- */
+.scope { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-top: 1.5rem; }
+.scope h3 { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 400; }
+.scope .in h3 { color: var(--ok); }
+.scope .out h3 { color: var(--rust); }
+.scope ul { margin: 0.8rem 0 0; padding: 0; list-style: none; }
+.scope li { color: var(--text-muted); padding: 0.5rem 0 0.5rem 1.1rem; border-top: 1px solid var(--border); position: relative; font-size: 0.93rem; }
+.scope li::before { content: ''; position: absolute; left: 0; top: 1.05rem; width: 5px; height: 5px; border-radius: 9999px; background: var(--rust); }
+.scope .in li::before { background: var(--ok); }
+
+footer { border-top: 1px solid var(--border); padding-block: 1.6rem 2.2rem; }
+footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; font-family: var(--mono); font-size: 0.72rem; color: var(--text-muted); letter-spacing: 0.04em; }
+
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise 0.7s var(--ease) both; }
+.rise-1 { animation-delay: 0.05s; } .rise-2 { animation-delay: 0.12s; } .rise-3 { animation-delay: 0.19s; }
+
+@media (max-width: 920px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .split { grid-template-columns: 1fr; }
+  .runs { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+@media (max-width: 540px) {
+  .wrap { padding-inline: 1rem; }
+  .bar .chip { display: none; }
+  .scope { grid-template-columns: 1fr; }
+  .card { padding: 1.1rem 1rem; }
+  .runs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+</style>
+<script>
+  try { if (localStorage.getItem('gs-theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="bar">
+  <div class="wrap">
+    <span class="brand">
+      <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><path d="M13.6 8.7 L31 2.6 L31 14.8 Z" fill="var(--rust)" opacity="0.5"/><path d="M10.6 8.7 L3.5 6.6 L3.5 10.8 Z" fill="var(--rust)" opacity="0.22"/><path d="M8.7 5.9 L12.1 2.5 L15.5 5.9 Z" fill="var(--accent)"/><rect x="9.4" y="6.4" width="5.4" height="4.6" rx="0.9" fill="var(--text)"/><rect x="7.3" y="11.4" width="9.6" height="1.9" rx="0.95" fill="var(--accent)"/><path d="M9.2 13.9 H15 L17 29.2 H7.2 Z" fill="var(--accent)"/><path d="M8.72 17.6 H15.48 L15.72 19.5 H8.48 Z" fill="var(--rust)"/><path d="M8.1 22.4 H16.1 L16.37 24.4 H7.83 Z" fill="var(--rust)"/></svg>
+      graph-sentinel
+    </span>
+    <span class="chip" id="indexer" title="Indexer">connecting</span>
+    <span class="spacer"></span>
+    <span class="live" id="live" role="status" aria-live="polite"><span class="dot"></span><span id="ago">waiting for first tick</span></span>
+    <button class="theme" id="theme" type="button" aria-label="Toggle light and dark theme">Light</button>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero">
+    <div class="wrap">
+      <p class="kicker rise rise-1">Rewards eligibility</p>
+      <h1 id="headline" class="rise rise-2">Reading the ledger.</h1>
+      <p class="lede rise rise-3" id="lede">The first figures appear once the daemon has completed its first tick.</p>
+      <noscript><p class="error">This page draws from <code>/api/snapshot</code> and needs JavaScript. <code>graph-sentinel reo</code> prints the same figures.</p></noscript>
+      <div id="error"></div>
+
+      <div class="stats" id="stats" aria-live="polite"></div>
+
+      <div class="card">
+        <div class="card-head">
+          <p class="kicker">Deployments served per day</p>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div class="chart" id="chart"></div>
+        <p class="note" id="chart-note"></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <p class="kicker">The next oracle runs</p>
+          <span class="legend"><span>daily, about 10:00 UTC</span></span>
+        </div>
+        <div class="runs" id="runs"></div>
+        <p class="note" id="runs-note"></p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap split">
+      <div class="card">
+        <p class="kicker">Findings</p>
+        <h2>What needs attention.</h2>
+        <ul class="list" id="findings"></ul>
+      </div>
+      <div class="card">
+        <p class="kicker">Sources</p>
+        <h2>What it reads.</h2>
+        <ul class="list" id="sources"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <p class="kicker">Candidates</p>
+      <h2>Deployments worth adding.</h2>
+      <p class="lede">Signalled deployments you are not serving, ranked: already synced here, then on a chain graph-node already runs, then by fees earned, then by fewest competing allocations.</p>
+      <div class="card">
+        <div class="table-wrap"><table>
+          <thead><tr><th>Deployment</th><th>Network</th><th class="num">Signal</th><th class="num">Fees earned</th><th class="num">Allocations</th><th class="local">Synced here</th><th class="local">Chain here</th></tr></thead>
+          <tbody id="candidates"><tr><td colspan="7" class="no">Ranked within a minute of start-up, then every six hours.</td></tr></tbody>
+        </table></div>
+        <p class="note" id="cand-note"></p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <p class="kicker">Scope</p>
+      <h2>What it does, and what it does not.</h2>
+      <div class="scope">
+        <div class="in">
+          <h3>Does</h3>
+          <ul>
+            <li>Counts the distinct deployments you were paid to serve each UTC day, from tap-agent's own receipt notifications.</li>
+            <li>Replays the oracle's rule over that ledger: 29-day window, minimum applied retroactively.</li>
+            <li>Reads your eligibility straight from the RewardsEligibilityOracle contract.</li>
+            <li>Ranks signalled deployments you could add, cheapest first.</li>
+          </ul>
+        </div>
+        <div class="out">
+          <h3>Does not</h3>
+          <ul>
+            <li>See latency or freshness as the gateway measured them. Receipts make every count an upper bound.</li>
+            <li>Remember days before it started: tap-agent deletes receipts once they are aggregated.</li>
+            <li>Write to any database, allocate, or sign anything. It holds no keys.</li>
+            <li>Ask for a login. Keep it on loopback or behind your own proxy.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap"><span id="version">graph-sentinel</span><span>MIT OR Apache-2.0 · read-only</span></div>
+</footer>
+
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const parseDay = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
+  const dayName = (s) => { const d = parseDay(s); return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`; };
+  const addDays = (s, n) => { const d = parseDay(s); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const diffDays = (a, b) => Math.round((parseDay(b) - parseDay(a)) / 86400000);
+  const num = (n, dp = 0) => Number(n).toLocaleString('en-GB', { maximumFractionDigits: dp, minimumFractionDigits: dp });
+  const ago = (iso) => {
+    const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+    if (s < 60) return `${s} s ago`;
+    if (s < 3600) return `${Math.round(s / 60)} min ago`;
+    if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+    return `${Math.round(s / 86400)} d ago`;
+  };
+  const shortAddr = (a) => a && a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
+  const shortDep = (d) => `${d.slice(0, 8)}…${d.slice(-6)}`;
+
+  // The minimum in force on a day, from the published schedule.
+  const nAt = (steps, day) => { let n = 1; for (const s of steps) if (s.from <= day) n = s.subgraphs_per_day; return n; };
+
+  let snap = null;
+
+  // --- theme ---------------------------------------------------------------
+  const themeBtn = $('theme');
+  const setThemeLabel = () => { themeBtn.textContent = document.documentElement.dataset.theme === 'light' ? 'Dark' : 'Light'; };
+  setThemeLabel();
+  themeBtn.addEventListener('click', () => {
+    const light = document.documentElement.dataset.theme !== 'light';
+    if (light) document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme;
+    try { localStorage.setItem('gs-theme', light ? 'light' : 'dark'); } catch (e) {}
+    setThemeLabel();
+  });
+
+  // --- headline and stats --------------------------------------------------
+  function renderHero(s) {
+    const r = s.reo;
+    $('error').innerHTML = s.reo_error ? `<p class="error">${esc(s.reo_error)}</p>` : '';
+    if (!r) return;
+    const hold = r.if_traffic_holds;
+    const next = r.next_step;
+    const chain = r.on_chain;
+
+    let head;
+    if (hold.first_failing_run) {
+      const n = hold.runs.find((v) => v.run === hold.first_failing_run)?.subgraphs_per_day;
+      head = `At ${r.typical_count} a day, the run on ${dayName(hold.first_failing_run)} fails.`;
+      if (hold.first_failing_run === r.today) head = `Today's oracle run fails at ${n} a day.`;
+    } else if (hold.eligible_until) {
+      head = `Eligible through ${dayName(hold.eligible_until)} at the current pace.`;
+    } else {
+      head = 'No qualifying days in the window yet.';
+    }
+    $('headline').textContent = head;
+
+    const parts = [];
+    if (chain) {
+      const never = Date.parse(chain.renewal_time) === 0;
+      if (chain.eligible) {
+        const until = new Date(Date.parse(chain.renewal_time) + chain.eligibility_period_secs * 1000);
+        parts.push(`<strong>Eligible</strong> on chain until ${until.getUTCDate()} ${MONTHS[until.getUTCMonth()]}.`);
+      } else {
+        parts.push(`<strong>Ineligible</strong> on chain${never ? ', never renewed' : ''}: rewards are withheld.`);
+      }
+    }
+    if (next && r.shortfall_next > 0) {
+      parts.push(`The minimum rises to ${next.subgraphs_per_day} a day on ${dayName(next.from)}: serve <strong>${r.shortfall_next} more</strong> a day.`);
+    } else if (next) {
+      parts.push(`The minimum rises to ${next.subgraphs_per_day} a day on ${dayName(next.from)}; your typical day clears it.`);
+    }
+    if (r.last_posted && r.last_posted.ledger.passes && !r.last_posted.renewed) {
+      parts.push(`The ${dayName(r.last_posted.ledger.run)} run did not renew you despite ${r.last_posted.ledger.qualifying_days} qualifying days in the receipts, so read these counts as optimistic.`);
+    }
+    $('lede').innerHTML = parts.join(' ');
+
+    let chainStat;
+    if (!chain) chainStat = { v: 'Not read', cls: '', sub: 'Add an arbitrum-one RPC to read the oracle contract.' };
+    else if (chain.eligible) {
+      const until = new Date(Date.parse(chain.renewal_time) + chain.eligibility_period_secs * 1000);
+      chainStat = { v: 'Eligible', cls: 'ok', sub: `Renewed ${dayName(chain.renewal_time.slice(0, 10))}, valid until ${until.getUTCDate()} ${MONTHS[until.getUTCMonth()]}.` };
+    } else {
+      chainStat = { v: 'Ineligible', cls: 'warn', sub: Date.parse(chain.renewal_time) === 0 ? 'Never renewed by the oracle.' : `Last renewed ${dayName(chain.renewal_time.slice(0, 10))}.` };
+    }
+    const cover = hold.eligible_until ? diffDays(r.today, hold.eligible_until) : 0;
+    const stats = [
+      { label: 'On chain', value: chainStat.v, cls: chainStat.cls, sub: chainStat.sub },
+      { label: 'Served today', value: r.today_count, unit: `of ${r.subgraphs_per_day_now}`, sub: `Distinct deployments so far this UTC day.` },
+      { label: 'Typical day', value: r.typical_count, unit: 'median, 7 d', sub: next ? `${next.subgraphs_per_day} needed from ${dayName(next.from)}${r.shortfall_next ? `: short by ${r.shortfall_next}` : ''}.` : `${r.subgraphs_per_day_now} needed today.` },
+      { label: 'Cover if traffic holds', value: hold.eligible_until ? cover : 0, unit: 'days', sub: hold.eligible_until ? `Until ${dayName(hold.eligible_until)}, if the oracle credits what the receipts show.` : 'No passing run in view.' },
+    ];
+    $('stats').innerHTML = stats.map((x) => `
+      <div class="stat"><p class="label">${esc(x.label)}</p>
+        <p class="value ${x.cls || ''}">${esc(x.value)}${x.unit ? `<span class="unit">${esc(x.unit)}</span>` : ''}</p>
+        <p class="sub">${esc(x.sub)}</p></div>`).join('');
+  }
+
+  // --- chart ---------------------------------------------------------------
+  function renderChart(s) {
+    const r = s.reo;
+    const box = $('chart');
+    if (!r || !s.days.length) { box.innerHTML = ''; return; }
+    const today = r.today;
+    const nNow = r.subgraphs_per_day_now;
+    const next = r.next_step;
+    const typical = r.typical_count;
+    const horizon = 14;
+
+    const bars = s.days.map((d) => ({ day: d.day, count: d.count, projected: false }));
+    for (let i = 1; i <= horizon; i++) {
+      const day = addDays(today, i);
+      bars.push({ day, count: typical, projected: true });
+    }
+
+    const W = Math.max(320, box.clientWidth || 800);
+    const H = W < 560 ? 220 : 280;
+    const pad = { l: 34, r: 12, t: 26, b: 28 };
+    const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+    const maxN = Math.max(nNow, next ? next.subgraphs_per_day : 0);
+    const yMax = Math.max(4, Math.ceil(Math.max(maxN, ...bars.map((b) => b.count)) * 1.15));
+    const y = (v) => pad.t + ih - (v / yMax) * ih;
+    const slot = iw / bars.length;
+    const gap = Math.min(4, Math.max(2, slot * 0.22));
+    const bw = Math.max(2, slot - gap);
+    const x = (i) => pad.l + i * slot + gap / 2;
+
+    const ticks = [];
+    const step = yMax <= 8 ? 2 : yMax <= 20 ? 5 : Math.ceil(yMax / 4 / 5) * 5;
+    for (let v = 0; v <= yMax; v += step) ticks.push(v);
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Distinct deployments served per day over the oracle window, with the next ${horizon} days projected at the typical count">`;
+    for (const v of ticks) {
+      svg += `<line class="${v === 0 ? 'base' : 'grid'}" x1="${pad.l}" x2="${W - pad.r}" y1="${y(v)}" y2="${y(v)}"/>`;
+      svg += `<text class="tick" x="${pad.l - 8}" y="${y(v) + 4}" text-anchor="end">${v}</text>`;
+    }
+
+    // The bar shape: square at the baseline, 4px rounded at the data end.
+    const barPath = (x0, y0, w, h) => {
+      const rr = Math.min(4, w / 2, h);
+      const yb = y0 + h;
+      return `M${x0},${yb} V${y0 + rr} Q${x0},${y0} ${x0 + rr},${y0} H${x0 + w - rr} Q${x0 + w},${y0} ${x0 + w},${y0 + rr} V${yb} Z`;
+    };
+
+    bars.forEach((b, i) => {
+      const h = Math.max(0, y(0) - y(b.count));
+      const nDay = nAt(s.steps, b.projected ? b.day : today);
+      const meets = b.count >= nDay;
+      const x0 = x(i);
+      if (b.count > 0) {
+        if (b.projected) {
+          svg += `<path class="mark" d="${barPath(x0 + 0.75, y(b.count) + 0.75, bw - 1.5, h - 0.75)}" fill="none" stroke="${meets ? 'var(--accent)' : 'var(--text-faint)'}" stroke-width="1.5" stroke-dasharray="3 2"/>`;
+        } else {
+          svg += `<path class="mark" d="${barPath(x0, y(b.count), bw, h)}" fill="${meets ? 'var(--accent)' : 'var(--text-faint)'}"/>`;
+        }
+      }
+      svg += `<rect class="hit" data-i="${i}" x="${pad.l + i * slot}" y="${pad.t}" width="${slot}" height="${ih}"/>`;
+    });
+
+    // Today marker, between the window and the projection.
+    const ti = s.days.length - 1;
+    const tx = x(ti) + bw + gap / 2;
+    svg += `<line x1="${tx}" x2="${tx}" y1="${pad.t - 10}" y2="${y(0)}" stroke="var(--rust)" stroke-width="1" stroke-dasharray="2 3"/>`;
+    svg += `<text class="lab" x="${tx - 6}" y="${pad.t - 14}" text-anchor="end">window</text>`;
+    svg += `<text class="lab" x="${tx + 6}" y="${pad.t - 14}">projected</text>`;
+
+    // Minimum lines: today's, and the next step's, which applies retroactively.
+    svg += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(nNow)}" y2="${y(nNow)}" stroke="var(--rust)" stroke-width="2"/>`;
+    svg += `<text class="lab" x="${pad.l + 6}" y="${y(nNow) - 6}">${nNow} today</text>`;
+    if (next && next.subgraphs_per_day !== nNow) {
+      svg += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(next.subgraphs_per_day)}" y2="${y(next.subgraphs_per_day)}" stroke="var(--rust)" stroke-width="2" stroke-dasharray="6 4"/>`;
+      svg += `<text class="lab" x="${pad.l + 6}" y="${y(next.subgraphs_per_day) - 6}">${next.subgraphs_per_day} from ${dayName(next.from)}</text>`;
+    }
+
+    // x labels: weekly through the window, plus today.
+    bars.forEach((b, i) => {
+      const fromEnd = ti - i;
+      const label = i === ti || (fromEnd > 3 && fromEnd % 7 === 0) || (b.projected && (i - ti) % 7 === 0);
+      if (!label) return;
+      svg += `<text class="tick${i === ti ? ' today' : ''}" x="${x(i) + bw / 2}" y="${H - 8}" text-anchor="middle">${i === ti ? 'today' : dayName(b.day)}</text>`;
+    });
+    svg += '</svg>';
+    box.innerHTML = svg;
+
+    $('legend').innerHTML = `
+      <span><i class="sw q"></i>meets today's minimum</span>
+      <span><i class="sw b"></i>below it</span>
+      <span><i class="sw p"></i>projected at ${typical} a day</span>
+      <span><i class="sw line"></i>minimum</span>
+      ${next ? '<span><i class="sw line next"></i>next step</span>' : ''}`;
+
+    const tip = $('tip');
+    box.querySelectorAll('.hit').forEach((el) => {
+      const show = () => {
+        const b = bars[Number(el.dataset.i)];
+        const nToday = nNow;
+        const lines = [`meets ${nToday} today: ${b.count >= nToday ? 'yes' : 'no'}`];
+        if (next && next.subgraphs_per_day !== nToday) lines.push(`meets ${next.subgraphs_per_day} from ${dayName(next.from)}: ${b.count >= next.subgraphs_per_day ? 'yes' : 'no'}`);
+        tip.innerHTML = `<p class="t-day">${esc(dayName(b.day))}${b.day === today ? ' · today, partial' : ''}${b.projected ? ' · projected' : ''}</p>
+          <p class="t-val">${b.count} deployment${b.count === 1 ? '' : 's'}</p>
+          ${lines.map((l) => `<p class="t-row">${esc(l)}</p>`).join('')}`;
+        const er = el.getBoundingClientRect(), cr = box.getBoundingClientRect();
+        tip.classList.add('on');
+        const tw = tip.offsetWidth;
+        let left = er.left - cr.left + er.width / 2 - tw / 2;
+        left = Math.max(0, Math.min(left, cr.width - tw));
+        tip.style.left = `${left + cr.left + window.scrollX}px`;
+        tip.style.top = `${cr.top + window.scrollY - tip.offsetHeight - 6}px`;
+        el.nextElementSibling?.classList?.add('hover');
+      };
+      el.addEventListener('mouseenter', show);
+      el.addEventListener('mouseleave', () => tip.classList.remove('on'));
+    });
+
+    const since = r.observed_since;
+    $('chart-note').innerHTML = since
+      ? `Counted from TAP receipts, so each bar is an upper bound on what the oracle will credit. The ledger starts ${esc(dayName(since))}; earlier days read as zero.`
+      : 'No receipts seen yet. The ledger fills as tap-agent stores them.';
+  }
+
+  // --- the run strip -------------------------------------------------------
+  function renderRuns(s) {
+    const r = s.reo;
+    if (!r) return;
+    const runs = r.if_traffic_holds.runs;
+    $('runs').innerHTML = runs.map((v) => {
+      const step = s.steps.some((st) => st.from === v.run);
+      return `<div class="run ${v.passes ? 'pass' : 'fail'}${v.run === r.today ? ' today' : ''}${step ? ' step' : ''}" title="Run on ${esc(v.run)}: ${v.qualifying_days} qualifying days at ${v.subgraphs_per_day} a day">
+        <p class="d">${v.run === r.today ? 'today' : esc(dayName(v.run))}</p>
+        <p class="q">${v.qualifying_days}<small> of ${r.min_online_days}</small></p>
+        <p class="v">${v.passes ? 'renews' : 'fails'}</p></div>`;
+    }).join('');
+    const stop = r.if_traffic_stops.first_failing_run;
+    $('runs-note').innerHTML = `Qualifying days in each run's window, against the ${r.min_online_days} it needs, if you keep serving ${r.typical_count} a day.` +
+      (stop ? ` If traffic stopped today, the first failing run would be ${esc(dayName(stop))}.` : '');
+  }
+
+  // --- findings and sources ------------------------------------------------
+  function renderFindings(s) {
+    const f = [...s.findings].sort((a, b) => ['critical', 'warn', 'info'].indexOf(a.severity) - ['critical', 'warn', 'info'].indexOf(b.severity));
+    $('findings').innerHTML = f.length ? f.map((x) => `
+      <li><span class="tag ${esc(x.severity)}">${esc(x.severity)}</span>
+        <span class="f-sum">${esc(x.summary)}</span>
+        <span class="f-meta">${esc(x.kind)} · first seen ${esc(ago(x.first_seen))}</span></li>`).join('')
+      : '<li class="empty">Nothing needs attention.</li>';
+  }
+
+  function renderSources(s) {
+    $('sources').innerHTML = s.sources.length ? s.sources.map((x) => `
+      <li class="src"><span class="dot ${x.up ? '' : 'down'}" aria-hidden="true"></span>
+        <span class="name">${esc(x.name)} <span class="sr">${x.up ? '' : '· down'}</span></span>
+        <span class="ago">${esc(ago(x.checked_at))}</span>
+        ${x.detail ? `<span class="detail">${esc(x.detail)}</span>` : ''}</li>`).join('')
+      : '<li class="empty">No source checked yet.</li>';
+  }
+
+  function renderCandidates(s) {
+    if (!s.candidates) return;
+    $('candidates').innerHTML = s.candidates.length ? s.candidates.map((c) => `
+      <tr><td class="dep" title="${esc(c.deployment)}">${esc(shortDep(c.deployment))}</td>
+        <td>${esc(c.network || '?')}</td>
+        <td class="num">${num(c.signal_grt)}</td>
+        <td class="num">${num(c.query_fees_grt)}</td>
+        <td class="num">${c.active_allocations}</td>
+        ${s.graph_node ? `<td>${c.synced_locally ? '<span class="yes">yes</span>' : '<span class="no">no</span>'}</td>
+        <td>${c.chain_supported ? '<span class="yes">yes</span>' : '<span class="no">no</span>'}</td>` : ''}</tr>`).join('')
+      : '<tr><td colspan="7" class="no">No candidates pass the filters.</td></tr>';
+    document.querySelectorAll('th.local').forEach((th) => { th.hidden = !s.graph_node; });
+    $('cand-note').innerHTML = `Signal and fees in GRT. Ranked ${esc(ago(s.candidates_at))}.` +
+      (s.graph_node ? '' : ' Give graph-sentinel graph-node\'s database (<code>postgres_url</code>) and it will also mark what is already synced here and which chains you run.');
+  }
+
+  // --- loop ----------------------------------------------------------------
+  function renderAll() {
+    if (!snap) return;
+    $('indexer').textContent = shortAddr(snap.indexer);
+    $('indexer').title = `Indexer ${snap.indexer}`;
+    $('version').textContent = `graph-sentinel ${snap.version}`;
+    renderHero(snap); renderChart(snap); renderRuns(snap); renderFindings(snap); renderSources(snap); renderCandidates(snap);
+  }
+
+  function tickAgo() {
+    const live = $('live');
+    if (!snap || !snap.generated_at) return;
+    $('ago').textContent = `updated ${ago(snap.generated_at)}`;
+    // Ticks run every two minutes; three missed means the daemon or its sources are stuck.
+    live.classList.toggle('stale', Date.now() - Date.parse(snap.generated_at) > 6 * 60 * 1000);
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch('/api/snapshot', { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      snap = await r.json();
+      renderAll();
+      tickAgo();
+    } catch (e) {
+      $('ago').textContent = 'daemon unreachable';
+      $('live').classList.add('stale');
+    }
+  }
+
+  let resizeT;
+  new ResizeObserver(() => { clearTimeout(resizeT); resizeT = setTimeout(() => snap && renderChart(snap), 80); }).observe($('chart'));
+  poll();
+  setInterval(poll, 30000);
+  setInterval(tickAgo, 1000);
+})();
+</script>
+</body>
+</html>

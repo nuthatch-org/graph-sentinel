@@ -2,6 +2,20 @@
 
 Newest first.
 
+## 2026-10-23: dashboard, Telegram and Discord, lighthouse mark
+
+- Bare `graph-sentinel` runs the daemon and serves its dashboard on `listen` (loopback by
+  default): verdict headline, four stat tiles, served-per-day chart against the minimum with a
+  14-day projection, the next oracle runs, findings, source health including each notification
+  channel, ranked candidates, and a scope panel. One embedded HTML file, self-hosted fonts,
+  cargopete house style, light theme, phone width checked.
+- Notifications: `[[outputs.notify]]` channels for Telegram, Discord, Slack and generic JSON,
+  per-channel `min_severity`, a start-up "watching" message, a digest above five events, the
+  dashboard link in every message. Delivery verified against a local capture server, including
+  the Telegram request path and HTML escaping; not yet against real Telegram or Discord.
+- Posted oracle runs now come from the chain; new `reo_oracle_disagrees` finding.
+- Lighthouse mark for the favicon, header and README.
+
 ## 2026-10-23: renamed to graph-sentinel; M0 and M1 code complete, unverified against a live stack
 
 - Renamed from lapwing: repo `nuthatch-org/graph-sentinel`, binary `graph-sentinel`, crates

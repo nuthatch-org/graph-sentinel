@@ -81,17 +81,18 @@ pub fn report(
 pub fn findings(r: &Report, now: DateTime<Utc>) -> Vec<Finding> {
     let mut out = Vec::new();
     if let Some(c) = &r.on_chain
-        && !c.eligible {
-            out.push(Finding::new(
-                CHECK,
-                "reo_ineligible",
-                "indexer",
-                Severity::Critical,
-                "REO reports this indexer ineligible: indexing rewards are withheld",
-                json!({ "renewal_time": c.renewal_time, "last_oracle_update": c.last_oracle_update }),
-                now,
-            ));
-        }
+        && !c.eligible
+    {
+        out.push(Finding::new(
+            CHECK,
+            "reo_ineligible",
+            "indexer",
+            Severity::Critical,
+            "REO reports this indexer ineligible: indexing rewards are withheld",
+            json!({ "renewal_time": c.renewal_time, "last_oracle_update": c.last_oracle_update }),
+            now,
+        ));
+    }
     let p = &r.if_traffic_holds;
     if let Some(fail) = p.first_failing_run {
         let days_left = p.eligible_until.map(|u| (u - r.today).num_days());

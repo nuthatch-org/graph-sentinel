@@ -10,7 +10,13 @@ Newest first.
   (split and legacy layouts), network subgraph, index-node, JSON-RPC with the REO view calls.
 - Binary: config, sqlite ledger and findings lifecycle, `run`, `doctor`, `status`, `reo`,
   `reo candidates`, `reo history`, `/metrics`, generic and Slack webhooks.
-- 24 tests. Not yet run against a real indexer database.
+- 24 unit tests, plus `sentinel-sources/tests/tap_db.rs` against Postgres 16 carrying
+  indexer-rs's real TAP migrations (set `GRAPH_SENTINEL_TEST_TAP_DB`): scan, day boundaries,
+  RAV days, and the LISTEN path via tap-agent's own insert trigger.
+- End to end on fixture receipts over real allocation ids, the live network subgraph and the live
+  oracle contract: `doctor`, `reo`, `reo history`, `reo candidates`, `run` with `/metrics`,
+  findings and a generic webhook all behave as designed.
+- Not yet run against a production indexer database or a graph-node database.
 
 ## 2026-10-23: M1 started
 

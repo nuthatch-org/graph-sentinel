@@ -20,6 +20,8 @@ pub struct Config {
     /// RPC spend guard; on when `graph_node_metrics_url` is set.
     pub spend: Option<Spend>,
     #[serde(default)]
+    pub network: Network,
+    #[serde(default)]
     pub outputs: Outputs,
 }
 
@@ -56,6 +58,11 @@ fn default_network_subgraph() -> String {
 impl Config {
     pub fn reo_enabled(&self) -> bool {
         self.sources.indexer_address.is_some() && self.sources.tap_db_url().is_some()
+    }
+
+    pub fn network_enabled(&self) -> bool {
+        self.network.enabled
+            && (self.sources.indexer_address.is_some() || self.network.fisherman_address.is_some())
     }
 
     pub fn spend_enabled(&self) -> bool {
@@ -180,6 +187,30 @@ impl Liveness {
             activity_window_blocks: self.activity_window_blocks,
             idle_patience: self.idle_patience,
             chain_patience: self.chain_patience,
+        }
+    }
+}
+
+/// What the network says about this indexer, and about disputes this fisherman filed.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Network {
+    pub enabled: bool,
+    #[serde(with = "humantime_serde")]
+    pub interval: Duration,
+    /// Watch disputes filed from this address.
+    pub fisherman_address: Option<Address>,
+    /// Public price and per-chain lag; the per-indexer routes need a subscription.
+    pub lodestar_url: String,
+}
+
+impl Default for Network {
+    fn default() -> Self {
+        Network {
+            enabled: true,
+            interval: Duration::from_secs(600),
+            fisherman_address: None,
+            lodestar_url: "https://api.lodestar-dashboard.com".into(),
         }
     }
 }

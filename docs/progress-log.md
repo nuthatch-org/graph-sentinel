@@ -2,6 +2,21 @@
 
 Newest first.
 
+## 2026-10-23: network view, disputes, Lodestar context
+
+- `[network]`: from the network subgraph, the indexer's provision, allocation, delegation and
+  lifetime rewards, every open allocation with its POI deadline (28 days, `maxPOIStaleness`),
+  and disputes filed against it. With `fisherman_address`, the disputes that address filed,
+  with their cancellable dates. Findings: `poi_due`, `poi_stale`, `dispute_against`,
+  `dispute_cancellable`, `dispute_ruled`. A failed read holds findings rather than resolving them.
+- Lodestar public endpoints: GRT price in the header, per-chain median lag beside each deployment.
+  Lodestar's per-indexer routes (QoS, revenue) are behind its paywall since 2026-10-18 and are
+  not used yet.
+- Public Arbitrum RPCs proved unusable for event history (rate limits, range caps, archive
+  behind tokens), which is why this reads the network subgraph rather than the chain.
+- Trap: the network subgraph's `cancellableAt` is garbage for some query disputes; only
+  plausible timestamps are kept.
+
 ## 2026-10-23: RPC spend guard
 
 - `[spend]` reads graph-node's `endpoint_request` counters (every RPC call, per provider and

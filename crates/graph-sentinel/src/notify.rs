@@ -36,6 +36,11 @@ pub fn title(kind: &str) -> String {
         "restart_issued" => "Restart issued".into(),
         "index_node_down" => "graph-node unreachable".into(),
         "budget_warning" => "RPC spend warning".into(),
+        "poi_stale" => "POI past the 28-day limit".into(),
+        "poi_due" => "POI due soon".into(),
+        "dispute_against" => "Dispute filed against you".into(),
+        "dispute_cancellable" => "Dispute can be cancelled".into(),
+        "dispute_ruled" => "Dispute ruled".into(),
         "budget_exceeded" => "RPC budget reached".into(),
         other => {
             let s = other.replace('_', " ");

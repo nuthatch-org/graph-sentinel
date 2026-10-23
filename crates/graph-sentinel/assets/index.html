@@ -73,6 +73,10 @@ code, .mono { font-family: var(--mono); font-feature-settings: 'calt' 1; }
   padding: 0.2rem 0.55rem; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw;
 }
 .bar .spacer { flex: 1; }
+.chip.price { color: var(--text-muted); }
+.chip.price b { color: var(--text); font-weight: 400; }
+.due-bad { color: var(--warn); }
+.due-soon { color: var(--rust); }
 .live { display: flex; align-items: center; gap: 0.5rem; font-family: var(--mono); font-size: 0.74rem; color: var(--text-muted); white-space: nowrap; }
 .dot { width: 8px; height: 8px; border-radius: 9999px; background: var(--ok); flex: none; }
 .live .dot { animation: pulse 2.4s ease-in-out infinite; }
@@ -238,7 +242,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
 }
 @media (max-width: 540px) {
   .wrap { padding-inline: 1rem; }
-  .bar .chip { display: none; }
+  .bar .chip { display: none !important; }
   .scope { grid-template-columns: 1fr; }
   .card { padding: 1.1rem 1rem; }
   .runs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -260,6 +264,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
       graph-sentinel
     </span>
     <span class="chip" id="indexer" title="Indexer">connecting</span>
+    <span class="chip price" id="price" hidden></span>
     <span class="spacer"></span>
     <span class="live" id="live" role="status" aria-live="polite"><span class="dot"></span><span id="ago">waiting for first tick</span></span>
     <button class="theme" id="theme" type="button" aria-label="Toggle light and dark theme">Light</button>
@@ -306,10 +311,44 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
       <div class="chips" id="live-summary"></div>
       <div class="card">
         <div class="table-wrap"><table>
-          <thead><tr><th>Deployment</th><th>Network</th><th>State</th><th class="num">Head</th><th class="num">Behind</th><th>Last moved</th></tr></thead>
+          <thead><tr><th>Deployment</th><th>Network</th><th>State</th><th class="num">Head</th><th class="num">Behind</th><th class="num" title="Median blocks behind across indexers Lodestar samples on this chain">Network median</th><th>Last moved</th></tr></thead>
           <tbody id="deployments"></tbody>
         </table></div>
         <p class="note" id="live-note"></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="net-sec" hidden>
+    <div class="wrap">
+      <p class="kicker">Network</p>
+      <h2 id="net-head">This indexer on the network.</h2>
+      <div class="stats" id="net-stats"></div>
+      <div class="card">
+        <div class="card-head"><p class="kicker">Open allocations, nearest POI deadline first</p><span class="legend"><span id="alloc-count"></span></span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Deployment</th><th>Network</th><th class="num">Allocated</th><th class="num">Rewards</th><th>Last POI</th><th>POI due</th></tr></thead>
+          <tbody id="allocations"></tbody>
+        </table></div>
+        <p class="note">POIs must come at most 28 days apart (<code>maxPOIStaleness</code> on the SubgraphService); a later one earns nothing for the gap. Read from the network subgraph.</p>
+      </div>
+      <div class="card">
+        <p class="kicker">Disputes against this indexer</p>
+        <ul class="list" id="disputes-against"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="fish-sec" hidden>
+    <div class="wrap">
+      <p class="kicker">Disputes you filed</p>
+      <h2 id="fish-head">Your disputes.</h2>
+      <div class="card">
+        <div class="table-wrap"><table>
+          <thead><tr><th>Dispute</th><th>Type</th><th>Indexer</th><th class="num">Bond</th><th>Status</th><th>Filed</th><th>Cancellable</th></tr></thead>
+          <tbody id="fish-disputes"></tbody>
+        </table></div>
+        <p class="note" id="fish-note">An undecided dispute can be cancelled once its 28-day dispute period ends, which returns the bond.</p>
       </div>
     </div>
   </section>
@@ -527,7 +566,9 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
 
     let head;
     if (s.spend && s.spend.stopped) head = 'RPC budget reached: graph-node is stopped until midnight UTC.';
+    else if (count('dispute_against')) head = `${plural(count('dispute_against'), 'dispute has', 'disputes have')} been filed against this indexer.`;
     else if (count('index_node_down')) head = 'graph-node is not answering.';
+    else if (count('poi_stale')) head = 'Allocations are past the 28-day POI limit.';
     else if (frozen) head = `${plural(frozen, 'deployment is', 'deployments are')} frozen while reporting healthy.`;
     else if (ineligible) head = 'Ineligible for indexing rewards.';
     else if (failed) head = `${plural(failed, 'deployment has', 'deployments have')} failed.`;
@@ -535,7 +576,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     else if (chains.length) head = `The ${chains.join(' and ')} chain head ${chains.length > 1 ? 'have' : 'has'} stopped.`;
     else if (still) head = `${plural(still, 'deployment is', 'deployments are')} not moving.`;
     else if (down.length) head = `Cannot reach the ${down.join(' or the ')}.`;
-    else if (deps || r) head = 'Nothing needs attention.';
+    else if (deps || r || s.network || s.fisherman || s.spend) head = 'Nothing needs attention.';
     else head = 'Waiting for the first tick.';
     $('headline').textContent = head;
 
@@ -548,6 +589,10 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     }
     if (s.spend && !s.spend.stopped) parts.push(`RPC spend ${usd(s.spend.today_usd)} of ${usd(s.spend.budget_usd)} today.`);
     if (r && head !== reoHeadline(r)) parts.push(`REO: ${reoHeadline(r).replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())}${ineligible ? ', and ineligible on chain' : ''}.`);
+    if (s.fisherman) {
+      const open = s.fisherman.disputes.filter((d) => d.status === 'Undecided').length;
+      parts.push(`${plural(open, 'dispute', 'disputes')} you filed ${open === 1 ? 'is' : 'are'} undecided.`);
+    }
     if (!f.length && (deps || r)) parts.push('No open findings.');
     else if (f.length) parts.push(`${plural(f.length, 'open finding', 'open findings')} below.`);
     $('lede').textContent = parts.join(' ') || 'The first readings appear within a minute of start-up.';
@@ -567,8 +612,9 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
         <td><span class="state ${cls}">${esc(label)}</span></td>
         <td class="num">${d.latest != null ? num(d.latest) : '<span class="no">unknown</span>'}</td>
         <td class="num ${d.behind ? '' : 'dim'}">${d.behind != null ? num(d.behind) : ''}</td>
+        <td class="num dim">${median(s, d.network)}</td>
         <td class="dim">${d.last_progress ? esc(ago(d.last_progress)) : 'not since start'}</td></tr>`;
-    }).join('') : '<tr><td colspan="6" class="no">The index-node reports no deployments.</td></tr>';
+    }).join('') : '<tr><td colspan="7" class="no">The index-node reports no deployments.</td></tr>';
     $('live-note').innerHTML = `Read from the index-node ${esc(ago(s.liveness_at))}. A deployment behind and still is checked against the chain: events waiting for it make it frozen, none make it idle. "Last moved" counts from when graph-sentinel started watching.`;
   }
 
@@ -618,6 +664,92 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     $('spend-lines').innerHTML = v.top.length ? v.top.map((l) => `<tr><td class="dep">${esc(l.provider)}</td><td>${esc(l.method)}</td><td class="num">${num(l.requests)}</td><td class="num">${usd(l.usd)}</td></tr>`).join('')
       : '<tr><td colspan="4" class="no">Nothing billed yet today.</td></tr>';
     $('spend-note').innerHTML = `Priced from graph-node's own request counters at Alchemy's per-method compute units and ${usd(0.45)} per million. Providers matching <code>${esc(v.billed_providers.join(', '))}</code> are billed; the rest are free public RPCs. Counting since ${esc(ago(v.counting_since))}; requests before graph-sentinel's first reading are not attributed.`;
+  }
+
+
+  // --- network ---------------------------------------------------------------
+  function median(s, chain) {
+    const c = s.chain_lag && s.chain_lag[chain];
+    return c ? `${num(c.median_blocks_behind)} <span class="no">of ${c.sampled_indexers}</span>` : '';
+  }
+  const grt = (v) => `${num(v)} GRT`;
+  const tsAgo = (t) => t ? ago(new Date(t * 1000).toISOString()) : 'never';
+  const inDays = (secs) => {
+    const d = Math.abs(secs) / 86400;
+    const txt = d < 1 ? `${Math.round(Math.abs(secs) / 3600)} h` : `${Math.round(d)} d`;
+    return secs < 0 ? `${txt} overdue` : `in ${txt}`;
+  };
+  const shortAny = (x) => x && x.length > 14 ? `${x.slice(0, 8)}…${x.slice(-4)}` : (x || '');
+  const dateOf = (t) => { const d = new Date(t * 1000); return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`; };
+
+  function renderPrice(s) {
+    const p = s.price;
+    $('price').hidden = !p;
+    if (!p) return;
+    $('price').innerHTML = `GRT <b>$${p.usd.toFixed(4)}</b> ${p.change_24h >= 0 ? '+' : ''}${p.change_24h.toFixed(1)}%`;
+  }
+
+  function renderNetwork(s) {
+    const n = s.network;
+    $('net-sec').hidden = !n;
+    if (!n) return;
+    const o = n.overview;
+    const usdOf = (g) => s.price ? ` ($${num(g * s.price.usd)})` : '';
+    const live = n.allocations.filter((a) => a.allocated_grt > 0);
+    const overdue = live.filter((a) => a.poi_deadline_in <= 0).length;
+    const soon = live.filter((a) => a.poi_deadline_in > 0 && a.poi_deadline_in <= 7 * 86400).length;
+    const open = n.disputes.filter((d) => d.status === 'Undecided').length;
+    $('net-head').textContent = open ? `${plural(open, 'open dispute', 'open disputes')} against this indexer.`
+      : overdue ? `${plural(overdue, 'allocation is', 'allocations are')} past the POI limit.`
+      : soon ? `${plural(soon, 'allocation needs', 'allocations need')} a POI within a week.`
+      : `${plural(live.length, 'live allocation', 'live allocations')}, all inside the POI limit.`;
+    const stats = o ? [
+      { label: 'Provisioned', value: num(o.provisioned_grt), unit: 'GRT', sub: o.thawing_grt > 0 ? `${grt(o.thawing_grt)} thawing.` : 'Nothing thawing.' },
+      { label: 'Allocated', value: num(o.allocated_grt), unit: 'GRT', sub: `${plural(n.allocations.length, 'open allocation', 'open allocations')}, ${live.length} with tokens.` },
+      { label: 'Delegated', value: num(o.delegated_grt), unit: 'GRT', sub: o.delegated_thawing_grt > 0 ? `${grt(o.delegated_thawing_grt)} leaving (thawing).` : 'No delegation thawing.' },
+      { label: 'Rewards earned', value: num(o.rewards_earned_grt), unit: 'GRT', sub: `Lifetime${usdOf(o.rewards_earned_grt)}. Query fees ${grt(o.query_fees_grt)}.` },
+    ] : [];
+    $('net-stats').innerHTML = stats.map((x) => `
+      <div class="stat"><p class="label">${esc(x.label)}</p>
+        <p class="value">${esc(x.value)}<span class="unit">${esc(x.unit)}</span></p>
+        <p class="sub">${esc(x.sub)}</p></div>`).join('');
+    $('alloc-count').textContent = n.allocations.length > 50 ? `first 50 of ${n.allocations.length}` : '';
+    $('allocations').innerHTML = n.allocations.length ? n.allocations.slice(0, 50).map((a) => {
+      const zero = a.allocated_grt <= 0;
+      const cls = zero ? 'no' : a.poi_deadline_in <= 0 ? 'due-bad' : a.poi_deadline_in <= 7 * 86400 ? 'due-soon' : '';
+      return `<tr><td class="dep" title="${esc(a.deployment)}">${esc(shortDep(a.deployment))}</td>
+        <td>${esc(a.network || '?')}</td>
+        <td class="num">${num(a.allocated_grt)}</td>
+        <td class="num">${num(a.rewards_grt)}</td>
+        <td class="dim">${esc(tsAgo(a.latest_poi_at))}</td>
+        <td class="${cls}">${zero ? 'no tokens' : esc(inDays(a.poi_deadline_in))}</td></tr>`;
+    }).join('') : '<tr><td colspan="6" class="no">No open allocations.</td></tr>';
+    $('disputes-against').innerHTML = n.disputes.length ? n.disputes.map((d) => `
+      <li><span class="tag ${d.status === 'Undecided' ? 'critical' : 'info'}">${esc(d.status)}</span>
+        <span class="f-sum">${esc(d.kind)} dispute by ${esc(shortAny(d.fisherman))}, ${num(d.deposit_grt)} GRT bond${d.slashed_grt > 0 ? `, ${num(d.slashed_grt)} GRT slashed` : ''}</span>
+        <span class="f-meta">${esc(shortAny(d.id))} · filed ${esc(dateOf(d.created_at))}</span></li>`).join('')
+      : '<li class="empty">None. Nobody has disputed this indexer.</li>';
+  }
+
+  function renderFisherman(s) {
+    const f = s.fisherman;
+    $('fish-sec').hidden = !f;
+    if (!f) return;
+    const open = f.disputes.filter((d) => d.status === 'Undecided');
+    const bond = open.reduce((a, d) => a + d.deposit_grt, 0);
+    $('fish-head').textContent = open.length ? `${plural(open.length, 'dispute', 'disputes')} open, ${num(bond)} GRT bonded.` : 'No disputes open.';
+    const now = Date.now() / 1000;
+    $('fish-disputes').innerHTML = f.disputes.length ? f.disputes.map((d) => {
+      const can = d.cancellable_at;
+      const cancel = d.status !== 'Undecided' ? (d.closed_at ? `ruled ${dateOf(d.closed_at)}` : '')
+        : can == null ? '<span class="no">unknown</span>'
+        : can <= now ? '<span class="due-soon">now</span>' : `${dateOf(can)} (${inDays(can - now).replace('in ', '')})`;
+      return `<tr><td class="dep" title="${esc(d.id)}">${esc(shortAny(d.id))}</td><td>${esc(d.kind)}</td>
+        <td class="dep" title="${esc(d.indexer)}">${esc(shortAny(d.indexer))}</td><td class="num">${num(d.deposit_grt)}</td>
+        <td><span class="state ${d.status === 'Undecided' ? 'quiet' : d.status === 'Accepted' ? 'good' : 'bad'}">${esc(d.status)}</span></td>
+        <td class="dim">${esc(dateOf(d.created_at))}</td><td>${cancel}</td></tr>`;
+    }).join('') : '<tr><td colspan="7" class="no">No disputes filed from this address.</td></tr>';
+    $('fish-note').textContent = `Filed from ${f.address}. An undecided dispute can be cancelled once its 28-day dispute period ends, which returns the bond. "Unknown" means the network subgraph's cancellable time is unusable for that dispute.`;
   }
 
   // --- chart ---------------------------------------------------------------
@@ -802,7 +934,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
     $('version').textContent = `graph-sentinel ${snap.version}`;
     $('reo-sec').hidden = !snap.reo;
     $('cand-sec').hidden = !snap.reo;
-    renderStatus(snap); renderSpend(snap); renderDeployments(snap);
+    renderPrice(snap); renderStatus(snap); renderSpend(snap); renderDeployments(snap); renderNetwork(snap); renderFisherman(snap);
     if (snap.reo) { renderReo(snap); renderChart(snap); renderRuns(snap); renderCandidates(snap); }
     renderFindings(snap); renderSources(snap);
   }

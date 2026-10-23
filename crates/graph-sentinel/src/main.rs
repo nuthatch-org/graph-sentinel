@@ -3,6 +3,7 @@ mod dashboard;
 mod findings;
 mod liveness;
 mod meter;
+mod network;
 mod notify;
 mod outputs;
 mod spend;
@@ -425,7 +426,11 @@ impl Shared {
 }
 
 async fn run(cfg: Config) -> Result<()> {
-    if !cfg.reo_enabled() && !cfg.liveness_enabled() && !cfg.spend_enabled() {
+    if !cfg.reo_enabled()
+        && !cfg.liveness_enabled()
+        && !cfg.spend_enabled()
+        && !cfg.network_enabled()
+    {
         anyhow::bail!(
             "nothing to watch: set [sources] index_node_url for liveness, \
              or indexer_address and indexer_postgres_url for the REO meter"
@@ -487,17 +492,88 @@ async fn run(cfg: Config) -> Result<()> {
             guard_stopped,
         ));
     }
+    if cfg.network_enabled() {
+        modules.push("network");
+        tokio::spawn(network_loop(
+            network::NetworkWatch::new(&cfg),
+            cfg.network.interval,
+            shared.clone(),
+        ));
+    }
     shared.snapshot.write().await.modules = modules.iter().map(|m| m.to_string()).collect();
     if notifier.is_empty() {
         tracing::warn!("no [[outputs.notify]] channel: findings show on the dashboard only");
     } else if cfg.outputs.announce_start {
-        notifier.announce(&modules).await;
+        // Once per six hours: a run of restarts (deploys, crashes) should not be a run of messages.
+        let recent = store
+            .meta("announced_at")
+            .await?
+            .and_then(|t| t.parse::<chrono::DateTime<Utc>>().ok())
+            .is_some_and(|t| Utc::now() - t < chrono::Duration::hours(6));
+        if !recent {
+            notifier.announce(&modules).await;
+            store
+                .set_meta("announced_at", &Utc::now().to_rfc3339())
+                .await?;
+        }
         let _ = shared.publish().await;
     }
 
     tokio::signal::ctrl_c().await?;
     tracing::info!("shutting down");
     Ok(())
+}
+
+async fn network_loop(w: network::NetworkWatch, every: Duration, sh: Shared) {
+    let mut tick = tokio::time::interval(every);
+    loop {
+        tick.tick().await;
+        let r = w.read().await;
+        let err = |e: &anyhow::Error| format!("{e:#}");
+        sh.source(
+            "lodestar",
+            &r.price
+                .as_ref()
+                .map(|p| format!("GRT ${:.4}", p.usd))
+                .map_err(err),
+        )
+        .await;
+        let sub: Option<Result<String, String>> = match (&r.indexer, &r.fisherman) {
+            (Some(Err(e)), _) | (_, Some(Err(e))) => Some(Err(err(e))),
+            (None, None) => None,
+            _ => Some(Ok("indexer and dispute data read".into())),
+        };
+        if let Some(s) = sub {
+            sh.source("network subgraph", &s).await;
+        }
+        // A failed read says nothing about whether anything cleared: leave findings as they are.
+        let failed = matches!(r.indexer, Some(Err(_))) || matches!(r.fisherman, Some(Err(_)));
+        let found = network::findings(&r);
+        {
+            let mut snap = sh.snapshot.write().await;
+            if let Ok(p) = r.price {
+                snap.price = Some(p);
+            }
+            if let Ok(c) = r.chain_lag {
+                snap.chain_lag = Some(c);
+            }
+            if let Some(Ok(i)) = r.indexer {
+                snap.network = Some(i);
+            }
+            if let Some(Ok(f)) = r.fisherman {
+                snap.fisherman = Some(f);
+            }
+            snap.network_at = Some(Utc::now());
+        }
+        let done = if failed {
+            sh.publish().await
+        } else {
+            sh.findings(sentinel_checks::network::CHECK, found).await
+        };
+        if let Err(e) = done {
+            tracing::warn!(error = %e, "recording network findings failed");
+        }
+    }
 }
 
 async fn spend_loop(mut g: spend::Guard, every: Duration, sh: Shared) {

@@ -56,6 +56,11 @@ pub struct Snapshot {
     pub deployments: Option<Vec<crate::liveness::Row>>,
     pub liveness_at: Option<DateTime<Utc>>,
     pub spend: Option<crate::spend::View>,
+    pub price: Option<sentinel_sources::lodestar::Price>,
+    pub chain_lag: Option<std::collections::HashMap<String, sentinel_sources::lodestar::ChainLag>>,
+    pub network: Option<crate::network::IndexerView>,
+    pub fisherman: Option<crate::network::FishermanView>,
+    pub network_at: Option<DateTime<Utc>>,
     pub candidates_at: Option<DateTime<Utc>>,
 }
 

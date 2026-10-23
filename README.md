@@ -2,6 +2,8 @@
 
 # graph-sentinel
 
+[Support my work <3](https://github.com/sponsors/cargopete)
+
 A read-only sentinel an indexer runs beside graph-node, indexer-agent, indexer-service and
 tap-agent. It catches the failures that cost indexers money while every existing monitor shows
 green: deployments frozen while reporting healthy, POIs repeated across epochs where the chain had

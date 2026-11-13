@@ -1,5 +1,10 @@
 name: ci
 on: [push, pull_request]
+
+env:
+  # The commands live in yatr.toml, so `yatr ci` locally is the same gate.
+  YATR_VERSION: "1.1.0"
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -9,6 +14,18 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --all
+      - name: Cache yatr
+        id: cache-yatr
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/yatr
+          key: yatr-${{ runner.os }}-${{ env.YATR_VERSION }}
+      - name: Install yatr
+        if: steps.cache-yatr.outputs.cache-hit != 'true'
+        # Cleared so yatr's own build never inherits this project's flags.
+        run: cargo install yatr --version ${{ env.YATR_VERSION }} --locked
+        env:
+          RUSTFLAGS: ""
+      - run: yatr fmt-check
+      - run: yatr lint
+      - run: yatr test

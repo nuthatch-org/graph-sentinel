@@ -3,7 +3,7 @@ on: [push, pull_request]
 
 env:
   # The commands live in yatr.toml, so `yatr ci` locally is the same gate.
-  YATR_VERSION: "1.1.1"
+  YATR_VERSION: "1.2.0"
 
 jobs:
   test:

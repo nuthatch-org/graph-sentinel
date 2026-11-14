@@ -73,7 +73,10 @@ pub fn allocation_findings(allocs: &[AllocationView], now: DateTime<Utc>) -> Vec
                 grt,
                 if stale.len() == 1 { "it" } else { "them" }
             ),
-            json!({ "allocations": stale.iter().map(|a| &a.id).collect::<Vec<_>>() }),
+            json!({
+                "allocations": stale.iter().map(|a| &a.id).collect::<Vec<_>>(),
+                "deployments": stale.iter().map(|a| &a.deployment).collect::<Vec<_>>(),
+            }),
             now,
         ));
     }
@@ -95,7 +98,10 @@ pub fn allocation_findings(allocs: &[AllocationView], now: DateTime<Utc>) -> Vec
                 first.network.as_deref().unwrap_or("?"),
                 days(first.poi_deadline_in)
             ),
-            json!({ "allocations": soon.iter().map(|a| &a.id).collect::<Vec<_>>() }),
+            json!({
+                "allocations": soon.iter().map(|a| &a.id).collect::<Vec<_>>(),
+                "deployments": soon.iter().map(|a| &a.deployment).collect::<Vec<_>>(),
+            }),
             now,
         ));
     }

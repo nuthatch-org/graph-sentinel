@@ -2,6 +2,43 @@
 
 Newest first.
 
+## 2026-11-14: first real graph-node (lab on Jimmy)
+
+- Lab: `~/sentinel-lab` on Jimmy, graph-node v0.45.0, eight deployments taken by signal from the
+  network subgraph (Arbitrum One, Base, mainnet on GraphOps; key read from `~/osprey-rig/.env`).
+  New build runs beside the old one as `graph-sentinel-lab.service` on `100.83.44.63:9478`,
+  restart off. The osprey rig was left stopped as found.
+- False positive, fixed: syncing deployments commit their head once per write batch
+  (`GRAPH_STORE_WRITE_BATCH_DURATION`, 300 s), so the first build called four busy deployments
+  frozen inside two minutes and graphman-restarted two. Liveness now reads `deployment_head` from
+  graph-node's metrics (`[liveness] graph_node_metrics_url`, defaulting to `[spend]`'s), and
+  without it waits out `write_batch` before anything worse than idle. The demo sim publishes
+  the metric; e2e still 10 of 10.
+- True positives, unstaged: QmdizJ6M's runner died at start (provider lacks `traces`) and the
+  index-node has called it healthy since; raised `frozen` within a minute. QmcYjagk failed at
+  mainnet 20,586,647 with `impossible combination of entity operations`; not yet investigated.
+- Not reproduced: graph-node #6730. Killing every Postgres connection did nothing to v0.45.0;
+  a ten-minute exclusive lock on one POI table did not stop processing either.
+- Also fixed: `${VAR}` expansion in `[sources.rpc]`; the TAP database falls back to
+  `postgres_url` only when `indexer_address` is set (a rig had payments failing every tick);
+  `chain_lag` serialised camelCase, so the page showed "NaN of undefined"; the failed remedy
+  quoted the whole fatal error.
+- Known: the spend guard prices only Alchemy-style providers, so GraphOps reads $0.00.
+
+## 2026-11-14: public; remedies, MCP server, e2e finished
+
+- Repo made public. History scanned first: no keys, tokens or keyed gateway URLs.
+- Remedies: `sentinel-checks::remedy` gives every finding kind typed steps (check, command and
+  host, config edit, SQL, manual), a risk level and a verify line. In `/api/snapshot` as
+  `remedies` by fingerprint, and in the dashboard's "Why?" drawer. Never executed.
+- POI findings' evidence now carries the deployment beside each allocation.
+- MCP: `POST /mcp` on the dashboard listener (stateless streamable HTTP, cross-origin requests
+  refused) and `graph-sentinel mcp [--url]` on stdio. Eight read-only tools over the snapshot.
+  Both verified against the demo, the stdio one through `docker compose exec -T`.
+- e2e: all ten incidents measured. `rotate-sender` never cleared because the test only stopped
+  the receipts; already-received receipts from an unconfigured sender stay unpaid, so the finding
+  was right. The test now configures the sender as the recovery.
+
 ## 2026-10-23: parked. Payment checks, demo stack, packaging
 
 State when parked:

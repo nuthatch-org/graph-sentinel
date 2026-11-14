@@ -20,6 +20,10 @@ pub struct Config {
     pub idle_patience: u32,
     /// Ticks a chain head may stand still before the chain is called stalled.
     pub chain_patience: u32,
+    /// Ticks a head must stand still before anything worse than idle is said. While syncing,
+    /// graph-node commits its head only once per write batch (`GRAPH_STORE_WRITE_BATCH_DURATION`,
+    /// 300 s by default), so without its in-memory head this must outlast one batch.
+    pub min_still_ticks: u32,
 }
 
 impl Default for Config {
@@ -29,6 +33,7 @@ impl Default for Config {
             activity_window_blocks: 2_000,
             idle_patience: 3,
             chain_patience: 2,
+            min_still_ticks: 1,
         }
     }
 }
@@ -112,6 +117,24 @@ pub struct State {
     pub verdict: Option<Verdict>,
 }
 
+/// `deployment_head{deployment="Qm…"}` from graph-node's metrics: the block each deployment
+/// has processed, ahead of what the index-node reports while a write batch is open.
+pub fn parse_heads(metrics: &str) -> std::collections::HashMap<String, u64> {
+    metrics
+        .lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("deployment_head{")?;
+            let (labels, value) = rest.rsplit_once("} ")?;
+            let d = labels.split(',').find_map(|kv| {
+                let (k, v) = kv.split_once('=')?;
+                (k.trim() == "deployment").then(|| v.trim().trim_matches('"').to_string())
+            })?;
+            let v = value.trim().parse::<f64>().ok()?;
+            Some((d, v as u64))
+        })
+        .collect()
+}
+
 /// Whether this tick needs the activity probe, so the caller can skip the RPC otherwise.
 pub fn needs_probe(prev: &State, o: &Observation, cfg: &Config) -> bool {
     let (Some(latest), Some(head)) = (o.latest, o.chain_head) else {
@@ -160,7 +183,9 @@ pub fn step(
             (Some(l), Some(h)) => h.saturating_sub(l),
             _ => u64::MAX,
         };
-        if lag <= cfg.lag_tolerance_blocks {
+        if prev.still_ticks + 1 < cfg.min_still_ticks {
+            Verdict::Idle
+        } else if lag <= cfg.lag_tolerance_blocks {
             if s.chain_still_ticks >= cfg.chain_patience {
                 Verdict::ChainStalled
             } else {
@@ -369,6 +394,57 @@ mod tests {
                 Verdict::Frozen,
                 Verdict::ConfirmedFrozen
             ]
+        );
+    }
+
+    // Seen on graph-node v0.45.0, 2026-11-14: a syncing deployment's committed head held for
+    // four one-minute ticks with work waiting while it processed 216 blocks in memory.
+    #[test]
+    fn a_committed_head_inside_one_write_batch_is_not_frozen() {
+        let cfg = Config {
+            min_still_ticks: 5,
+            ..Config::default()
+        };
+        let mut s = State::default();
+        let mut v = Vec::new();
+        for (i, p) in [None, Some(Probe::Logs(1559))]
+            .into_iter()
+            .chain([Some(Probe::Logs(1559)); 5])
+            .enumerate()
+        {
+            s = step(
+                &s,
+                &obs(33_799_448, 57_445_904 + i as u64),
+                p,
+                &cfg,
+                Utc::now(),
+            );
+            v.push(s.verdict.unwrap());
+        }
+        assert_eq!(
+            v[..5],
+            [
+                Verdict::Moving,
+                Verdict::Idle,
+                Verdict::Idle,
+                Verdict::Idle,
+                Verdict::Idle
+            ]
+        );
+        assert_eq!(v[5], Verdict::Frozen);
+        assert_eq!(v[6], Verdict::ConfirmedFrozen);
+    }
+
+    #[test]
+    fn heads_come_from_graph_nodes_metric() {
+        let m = "# TYPE deployment_head gauge\n\
+                 deployment_head{deployment=\"QmRmz2CiRy3LqJhfHFJivvzSAXjwbuZobpCq13hjTibaNF\",network=\"base\",shard=\"primary\"} 33799926\n\
+                 deployment_status{deployment=\"QmRmz2CiRy3LqJhfHFJivvzSAXjwbuZobpCq13hjTibaNF\",shard=\"\"} 2\n";
+        let h = parse_heads(m);
+        assert_eq!(h.len(), 1);
+        assert_eq!(
+            h["QmRmz2CiRy3LqJhfHFJivvzSAXjwbuZobpCq13hjTibaNF"],
+            33_799_926
         );
     }
 

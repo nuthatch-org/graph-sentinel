@@ -3,6 +3,7 @@ mod config;
 mod dashboard;
 mod findings;
 mod liveness;
+mod mcp;
 mod meter;
 mod network;
 mod notify;
@@ -64,6 +65,12 @@ enum Cmd {
         #[command(subcommand)]
         sub: Option<ReoCmd>,
     },
+    /// An MCP server on stdio for an operator's agent, reading a running daemon.
+    Mcp {
+        /// The daemon's dashboard; defaults to `[outputs] listen` from the config.
+        #[arg(long)]
+        url: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -90,12 +97,27 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
     let cli = Cli::parse();
+    // The agent's host may have no config at all, only the daemon's address.
+    if let Some(Cmd::Mcp { url: Some(url) }) = &cli.cmd {
+        return mcp::stdio(url.clone()).await;
+    }
     let cfg = config::load(&cli.config)?;
     match cli.cmd.unwrap_or(Cmd::Run) {
         Cmd::Run => run(cfg).await,
         Cmd::Doctor => doctor(&cfg).await,
         Cmd::Status => status(&cfg, cli.json).await,
         Cmd::Reo { sub } => reo_cmd(&cfg, sub, cli.json).await,
+        Cmd::Mcp { .. } => {
+            let addr = cfg
+                .outputs
+                .listen
+                .context("pass --url, or set [outputs] listen so there is a daemon to read")?;
+            let mut addr = addr;
+            if addr.ip().is_unspecified() {
+                addr.set_ip(std::net::Ipv4Addr::LOCALHOST.into());
+            }
+            mcp::stdio(format!("http://{addr}")).await
+        }
     }
 }
 
@@ -280,7 +302,7 @@ async fn doctor(cfg: &Config) -> Result<()> {
                 t.horizon_receipts, t.horizon_ravs, t.legacy_receipts, t.legacy_ravs
             ))
         }.await),
-        None => println!("skip  indexer db         no indexer_postgres_url: the REO meter is off"),
+        None => println!("skip  indexer db         no indexer here (set indexer_address, or indexer_postgres_url): REO and payments are off"),
     }
 
     if let Some(u) = &cfg.sources.index_node_url {
@@ -423,6 +445,13 @@ impl Shared {
         for (name, r) in self.notifier.statuses() {
             snap.set_source(&name, &r);
         }
+        snap.remedies = active
+            .iter()
+            .filter_map(|f| {
+                sentinel_checks::remedy::remedy(f, &snap.restart_command)
+                    .map(|r| (f.fingerprint.clone(), r))
+            })
+            .collect();
         snap.findings = active;
         snap.generated_at = Some(Utc::now());
         Ok(())
@@ -455,6 +484,7 @@ async fn run(cfg: Config) -> Result<()> {
             indexer: cfg.display_name(),
             steps: cfg.reo.rules().steps,
             graph_node: cfg.sources.postgres_url.is_some(),
+            restart_command: cfg.liveness.restart_command.clone(),
             ..Snapshot::default()
         })),
     };

@@ -33,7 +33,8 @@ pub struct Sources {
     pub indexer_address: Option<Address>,
     /// graph-node's primary shard. Optional for the REO meter; used by candidates and liveness.
     pub postgres_url: Option<String>,
-    /// The database tap-agent and indexer-service write to. Defaults to `postgres_url`.
+    /// The database tap-agent and indexer-service write to. Defaults to `postgres_url` when
+    /// `indexer_address` is set.
     pub indexer_postgres_url: Option<String>,
     /// Enables liveness.
     pub index_node_url: Option<String>,
@@ -44,9 +45,10 @@ pub struct Sources {
     /// Env var holding a bearer token for the network subgraph, if it needs one.
     pub network_subgraph_token_env: Option<String>,
     /// Take the URL from another tool's TOML, `path#dotted.key`, read in place, e.g.
-    /// `/home/pepe/osprey/osprey.toml#network_subgraph.url`. Wins over `network_subgraph_url`.
+    /// `~/osprey/osprey.toml#network_subgraph.url`. Wins over `network_subgraph_url`.
     pub network_subgraph_url_from_toml: Option<String>,
-    /// Chain name (as graph-node names it) → RPC URL.
+    /// Chain name (as graph-node names it) → RPC URL. `${VAR}` is taken from the environment,
+    /// as in graph-node's own config, so a key can stay in the stack's `.env`.
     #[serde(default)]
     pub rpc: HashMap<String, String>,
 }
@@ -93,9 +95,12 @@ impl Config {
 
 impl Sources {
     pub fn tap_db_url(&self) -> Option<&str> {
-        self.indexer_postgres_url
-            .as_deref()
-            .or(self.postgres_url.as_deref())
+        // graph-node's database stands in only where there is an indexer; on a fisherman's rig
+        // it holds no TAP tables, and payments would fail on every tick.
+        self.indexer_postgres_url.as_deref().or(self
+            .indexer_address
+            .as_ref()
+            .and(self.postgres_url.as_deref()))
     }
 
     /// The network subgraph URL, resolving `network_subgraph_url_from_toml` when set.
@@ -186,6 +191,13 @@ pub struct Liveness {
     pub activity_window_blocks: u64,
     pub idle_patience: u32,
     pub chain_patience: u32,
+    /// graph-node's metrics (port 8040), for each deployment's in-memory head. Defaults to
+    /// `[spend] graph_node_metrics_url`. Without it, liveness waits out `write_batch`.
+    pub graph_node_metrics_url: Option<String>,
+    /// graph-node's `GRAPH_STORE_WRITE_BATCH_DURATION`: how long a syncing deployment's
+    /// reported head may stand still while it is in fact working.
+    #[serde(with = "humantime_serde")]
+    pub write_batch: Duration,
     /// Run `restart_command` on a deployment frozen two ticks running. Off by default.
     pub restart: bool,
     /// `{deployment}` is replaced with the IPFS hash.
@@ -204,6 +216,8 @@ impl Default for Liveness {
             activity_window_blocks: c.activity_window_blocks,
             idle_patience: c.idle_patience,
             chain_patience: c.chain_patience,
+            graph_node_metrics_url: None,
+            write_batch: Duration::from_secs(300),
             restart: false,
             restart_command: "graphman --config /etc/graph-node/config.toml restart {deployment}"
                 .into(),
@@ -219,7 +233,14 @@ impl Liveness {
             activity_window_blocks: self.activity_window_blocks,
             idle_patience: self.idle_patience,
             chain_patience: self.chain_patience,
+            min_still_ticks: 1,
         }
+    }
+
+    /// Ticks of stillness that outlast one write batch, for when the in-memory head is unknown.
+    pub fn batch_ticks(&self) -> u32 {
+        let i = self.interval.as_secs().max(1);
+        (self.write_batch.as_secs().div_ceil(i) + 1) as u32
     }
 }
 
@@ -430,17 +451,54 @@ pub fn load(path: &Path) -> Result<Config> {
             }
         );
     }
-    Figment::new()
+    let mut cfg: Config = Figment::new()
         .merge(Toml::file(path))
         .merge(Env::prefixed("GRAPH_SENTINEL_").split("__"))
         .extract()
-        .with_context(|| format!("loading {}", path.display()))
+        .with_context(|| format!("loading {}", path.display()))?;
+    for (chain, url) in cfg.sources.rpc.iter_mut() {
+        *url = expand_env(url, |k| std::env::var(k).ok())
+            .with_context(|| format!("[sources.rpc] {chain:?}"))?;
+    }
+    Ok(cfg)
+}
+
+/// Replace each `${NAME}`. The error names the variable, never the URL, which may hold a key.
+fn expand_env(s: &str, get: impl Fn(&str) -> Option<String>) -> Result<String> {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("${") {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i + 2..];
+        let end = tail.find('}').context("an unclosed ${ in the URL")?;
+        let name = &tail[..end];
+        let v = get(name)
+            .filter(|v| !v.is_empty())
+            .with_context(|| format!("environment variable {name} is not set"))?;
+        out.push_str(&v);
+        rest = &tail[end + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
 }
 
 #[cfg(test)]
 #[allow(clippy::result_large_err)] // figment::Jail's error type
 mod tests {
     use super::*;
+
+    #[test]
+    fn rpc_urls_expand_env_and_name_only_the_variable() {
+        let get = |k: &str| (k == "KEY").then(|| "s3cret".to_string());
+        assert_eq!(
+            expand_env("https://rpc.example/${KEY}/arb", get).unwrap(),
+            "https://rpc.example/s3cret/arb"
+        );
+        assert_eq!(expand_env("https://plain", get).unwrap(), "https://plain");
+        let e = expand_env("https://rpc.example/${MISSING}", get).unwrap_err();
+        assert_eq!(e.to_string(), "environment variable MISSING is not set");
+        assert!(expand_env("https://x/${KEY", get).is_err());
+    }
 
     #[test]
     fn minimal_config_is_an_address() {
@@ -452,6 +510,11 @@ mod tests {
             jail.set_env("GRAPH_SENTINEL_SOURCES__POSTGRES_URL", "postgres://x@y/z");
             let c = load(Path::new("graph-sentinel.toml")).expect("config");
             assert_eq!(c.sources.tap_db_url(), Some("postgres://x@y/z"));
+            let rig = Sources {
+                indexer_address: None,
+                ..c.sources.clone()
+            };
+            assert_eq!(rig.tap_db_url(), None);
             assert_eq!(
                 c.reo
                     .rules()

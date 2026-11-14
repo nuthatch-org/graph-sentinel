@@ -11,8 +11,9 @@ pub struct Lodestar {
     url: String,
 }
 
+// camelCase in from Lodestar, snake_case out to the page like every other snapshot field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all(deserialize = "camelCase"))]
 pub struct ChainLag {
     pub median_blocks_behind: f64,
     pub sampled_indexers: u32,

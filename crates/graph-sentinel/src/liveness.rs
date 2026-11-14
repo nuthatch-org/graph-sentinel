@@ -37,6 +37,8 @@ pub struct Row {
 
 pub struct Liveness {
     node: IndexNode,
+    metrics_url: Option<String>,
+    http: reqwest::Client,
     ipfs: Ipfs,
     rpcs: HashMap<String, Rpc>,
     store: Store,
@@ -50,6 +52,15 @@ impl Liveness {
         let url = cfg.sources.index_node_url.clone()?;
         Some(Liveness {
             node: IndexNode::new(url),
+            metrics_url: cfg
+                .liveness
+                .graph_node_metrics_url
+                .clone()
+                .or_else(|| cfg.spend.as_ref().map(|s| s.graph_node_metrics_url.clone())),
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_default(),
             ipfs: Ipfs::new(cfg.sources.ipfs_url.clone()),
             rpcs: cfg
                 .sources
@@ -106,14 +117,46 @@ impl Liveness {
         }
     }
 
+    async fn heads(&self) -> Option<HashMap<String, u64>> {
+        let url = self.metrics_url.as_ref()?;
+        let r = async {
+            let text = self
+                .http
+                .get(url)
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await?;
+            anyhow::Ok(liveness::parse_heads(&text))
+        }
+        .await;
+        match r {
+            Ok(h) if !h.is_empty() => Some(h),
+            Ok(_) => None,
+            Err(e) => {
+                tracing::warn!(error = %e, "graph-node metrics unreadable; waiting out the write batch");
+                None
+            }
+        }
+    }
+
     pub async fn tick(&self) -> Result<(Vec<Row>, Vec<Finding>)> {
         let statuses = self.node.statuses().await?;
-        let cfg = self.cfg.check_config();
+        let heads = self.heads().await;
+        let mut cfg = self.cfg.check_config();
+        if heads.is_none() {
+            cfg.min_still_ticks = self.cfg.batch_ticks();
+        }
         let now = Utc::now();
         let mut states = self.states.lock().await;
         let mut rows = Vec::with_capacity(statuses.len());
         let mut findings = Vec::new();
-        for st in statuses {
+        for mut st in statuses {
+            // The index-node reports the committed head; the metric is what has been processed.
+            if let Some(h) = heads.as_ref().and_then(|h| h.get(&st.deployment)) {
+                st.latest = Some(st.latest.map_or(*h, |l| l.max(*h)));
+            }
             let o = Observation {
                 deployment: st.deployment.clone(),
                 network: st.network.clone(),

@@ -4,7 +4,7 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
-# The package is private for now: a pull secret for ghcr.io is needed.
+# The package is public; a pull secret is only needed for a private mirror.
 imagePullSecrets: []
 
 # graph-sentinel.toml, mounted at /etc/graph-sentinel. Keep secrets out: use env/envFrom.

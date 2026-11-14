@@ -12,7 +12,8 @@ for any other stack, change the host names.
 - Docker with the compose plugin.
 - For notifications, a Telegram bot or a Discord webhook (both below).
 - For the network view, a gateway API key from [Subgraph Studio](https://thegraph.com/studio/apikeys/).
-- While the image is private: `docker login ghcr.io` with a GitHub token that has `read:packages`.
+- The image is published to `ghcr.io/nuthatch-org/graph-sentinel` on each tagged release. Before
+  the first one, build it from the repo root: `docker build -t ghcr.io/nuthatch-org/graph-sentinel:latest .`
 
 ## Compose route
 
@@ -55,7 +56,19 @@ quiet, and lets the REO meter read the oracle contract. Names as in graph-node's
 ```toml
 [sources.rpc]
 "arbitrum-one" = "https://arb1.arbitrum.io/rpc"
-"mainnet" = "https://your-mainnet-rpc"
+"mainnet" = "https://rpc.example.org/v1/evm/1/${RPC_KEY}"
+```
+
+`${VAR}` is read from the environment, as in graph-node's own config, so a key can stay in the
+stack's `.env`. An unset variable stops start-up and names the variable, never the URL.
+
+**graph-node metrics.** Lets liveness see each deployment's in-memory head. Without it, a syncing
+deployment looks still between write batches (five minutes by default), so liveness waits that
+long before calling anything frozen.
+
+```toml
+[liveness]
+graph_node_metrics_url = "http://index-node-0:8040/metrics"
 ```
 
 **REO meter.** Counts the deployments you serve each day against the Rewards Eligibility Oracle's

@@ -1,4 +1,4 @@
-//! The daemon's own page: `/` (the dashboard), `/api/snapshot`, `/metrics`.
+//! The daemon's own page: `/` (the dashboard), `/api/snapshot`, `/metrics`, `/mcp`.
 //! One embedded HTML file and two fonts; no frontend build, no third-party requests.
 
 use std::net::SocketAddr;
@@ -7,9 +7,10 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::Router;
 use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode};
 use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use chrono::{DateTime, Days, NaiveDate, Utc};
 use sentinel_checks::reo::Report;
 use sentinel_checks::reo::projection::DailyCounts;
@@ -47,6 +48,11 @@ pub struct Snapshot {
     pub days: Vec<Day>,
     pub steps: Vec<Step>,
     pub findings: Vec<Finding>,
+    /// What to do about each active finding, by fingerprint.
+    pub remedies: std::collections::BTreeMap<String, sentinel_checks::remedy::Remedy>,
+    /// The graphman template remedies fill in.
+    #[serde(skip)]
+    pub restart_command: String,
     pub sources: Vec<Source>,
     /// graph-node's database is configured, so candidates carry the local columns.
     pub graph_node: bool,
@@ -120,6 +126,35 @@ fn font(bytes: &'static [u8]) -> Response {
         .into_response()
 }
 
+/// Streamable HTTP without sessions or streaming: every reply is a single JSON body.
+async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    // A browser page on another origin must not be able to read the snapshot through this.
+    if let Some(origin) = headers.get(header::ORIGIN).and_then(|o| o.to_str().ok()) {
+        let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
+        let origin_host = origin.split("://").nth(1);
+        if origin_host.is_none() || origin_host != host {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
+    let msg: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(m) => m,
+        Err(e) => {
+            let e = serde_json::json!({ "jsonrpc": "2.0", "id": null,
+                "error": { "code": -32700, "message": format!("parse error: {e}") } });
+            return (StatusCode::BAD_REQUEST, axum::Json(e)).into_response();
+        }
+    };
+    let snap = s.snapshot.clone();
+    match crate::mcp::handle(&msg, || async move {
+        Ok(serde_json::to_value(&*snap.read().await)?)
+    })
+    .await
+    {
+        Some(r) => axum::Json(r).into_response(),
+        None => StatusCode::ACCEPTED.into_response(),
+    }
+}
+
 pub async fn serve(
     addr: SocketAddr,
     snapshot: Arc<RwLock<Snapshot>>,
@@ -156,6 +191,10 @@ pub async fn serve(
                     s.metrics.encode(),
                 )
             }),
+        )
+        .route(
+            "/mcp",
+            post(mcp).get(|| async { StatusCode::METHOD_NOT_ALLOWED }),
         )
         .route(
             "/fonts/space-grotesk.woff2",

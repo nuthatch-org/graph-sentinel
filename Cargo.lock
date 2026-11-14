@@ -806,7 +806,7 @@ dependencies = [
 
 [[package]]
 name = "graph-sentinel"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1889,7 +1889,7 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "sentinel-checks"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1905,7 +1905,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-sources"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1920,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-types"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "serde",

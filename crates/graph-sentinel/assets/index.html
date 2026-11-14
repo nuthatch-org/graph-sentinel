@@ -185,6 +185,10 @@ section + section { border-top: 1px solid var(--border); }
 .why summary:hover { text-decoration: underline; text-underline-offset: 3px; }
 .why dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 0.9rem; margin: 0.6rem 0 0.2rem; padding: 0.7rem 0.8rem; background: var(--bg-code); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.8rem; }
 .why dt { font-family: var(--mono); font-size: 0.72rem; color: var(--text-muted); }
+.fix { margin: 0.4rem 0 0.2rem; padding: 0 0 0 1.1rem; font-size: 0.8rem; }
+.fix li { display: list-item; margin: 0.2rem 0; }
+.fix code { font-family: var(--mono); font-size: 0.74rem; background: var(--bg-code); padding: 0.05rem 0.3rem; border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+.fix-head { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); margin-top: 0.6rem; }
 .why dd { margin: 0; font-family: var(--mono); font-size: 0.74rem; color: var(--text); overflow-wrap: anywhere; }
 .src { display: grid; grid-template-columns: auto 1fr auto; gap: 0.2rem 0.7rem; align-items: center; }
 .src .dot { margin-top: 1px; }
@@ -962,14 +966,28 @@ footer .wrap { display: flex; justify-content: space-between; gap: 1rem; flex-wr
       return `<dt>${esc(label(k))}</dt><dd>${esc(val)}</dd>`;
     }).join('');
   }
+  function stepHtml(st) {
+    switch (st.type) {
+      case 'command': return `Run <code>${esc(st.run)}</code> on the ${esc(st.on)}.`;
+      case 'config': return `In ${esc(st.file)}, under <code>${esc(st.section)}</code>: <code>${esc(st.change)}</code>`;
+      case 'sql': return `On the ${esc(st.database)} database: <code>${esc(st.statement)}</code>`;
+      default: return esc(st.what || '');
+    }
+  }
+  function remedyHtml(r) {
+    if (!r) return '';
+    return `<div class="fix-head">What to do · ${esc(r.risk)} risk</div><ol class="fix">${r.steps.map((st) => `<li>${stepHtml(st)}</li>`).join('')}</ol>` +
+      `<div class="fix-head">Worked when</div><p class="fix">${esc(r.verify)}</p>`;
+  }
   function renderFindings(s) {
+    const rem = s.remedies || {};
     const f = [...s.findings].sort((a, b) => ['critical', 'warn', 'info'].indexOf(a.severity) - ['critical', 'warn', 'info'].indexOf(b.severity));
     $('findings').innerHTML = f.length ? f.map((x) => `
       <li><span class="tag ${esc(x.severity)}">${esc(x.severity)}</span>
         <span class="f-sum">${esc(x.summary)}</span>
         <span class="f-meta">${esc(x.kind)} · first seen ${esc(ago(x.first_seen))}</span>
         <details class="why" data-fp="${esc(x.fingerprint)}"${openWhy.has(x.fingerprint) ? ' open' : ''}>
-          <summary>Why?</summary><dl>${evidenceRows(x.evidence)}</dl>
+          <summary>Why?</summary><dl>${evidenceRows(x.evidence)}</dl>${remedyHtml(rem[x.fingerprint])}
         </details></li>`).join('')
       : '<li class="empty">Nothing needs attention.</li>';
     $('findings').querySelectorAll('details.why').forEach((d) => d.addEventListener('toggle', () => {

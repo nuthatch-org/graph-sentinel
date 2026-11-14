@@ -408,6 +408,10 @@ class H(BaseHTTPRequestHandler):
             for k, v in METRICS.items():
                 prov, meth = k.split("|")
                 lines.append(f'endpoint_request{{conn_type="rpc",provider="{prov}",req_type="{meth}",result="success"}} {v}')
+            # The in-memory head graph-node reports beside the committed one; here they are equal.
+            lines.append("# TYPE deployment_head gauge")
+            for d in DEPLOYMENTS:
+                lines.append(f'deployment_head{{deployment="{d["id"]}",network="{d["network"]}",shard="primary"}} {d["latest"]}')
             return self.send(200, "\n".join(lines) + "\n", "text/plain")
         self.send(404, {"error": "not here"})
 

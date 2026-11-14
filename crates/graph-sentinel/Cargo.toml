@@ -12,9 +12,9 @@ chrono = "0.4.45"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 figment = { version = "0.10.19", features = ["toml", "env"] }
 humantime-serde = "1.1.1"
-sentinel-checks = { version = "0.0.1", path = "../sentinel-checks" }
-sentinel-sources = { version = "0.0.1", path = "../sentinel-sources" }
-sentinel-types = { version = "0.0.1", path = "../sentinel-types" }
+sentinel-checks = { version = "0.1.0", path = "../sentinel-checks" }
+sentinel-sources = { version = "0.1.0", path = "../sentinel-sources" }
+sentinel-types = { version = "0.1.0", path = "../sentinel-types" }
 prometheus-client = "0.25.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
